@@ -1,0 +1,11 @@
+# Pinned environment specification for Setun (ADR-012: WSL2 Ubuntu apt + venv).
+# Run `make doctor` to verify against this lockfile.
+
+python = 3.12
+verilator = 5.020
+yosys = 0.33
+cocotb = 1.8.1
+git:migen = INSTALLED_NON_GIT
+git:litex = 9187839f2d275352ef6f0d7ab14431e2a66b8f81
+git:litedram = f2d22975d67229676e10308ae6e71b819b6afe42
+git:liteeth = 9712c3899c4b9d162aca5aef403889ab2c8c4542

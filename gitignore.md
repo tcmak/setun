@@ -1,0 +1,15 @@
+# .gitignore
+
+```
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+sim_build/
+*.vcd
+*.fst
+```

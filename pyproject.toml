@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "setun"
+version = "0.1.0.dev0"
+description = "A LiteX-native ternary LLM toolchain: NPU overlay and compiler"
+readme = "README.md"
+license = { text = "BSD-2-Clause" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.4",
+    "pre-commit>=3.5",
+    "cocotb>=1.8,<1.9",
+    "cocotb-test>=0.2.4",
+]
+
+[project.scripts]
+setun = "setun.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["setun*", "targets*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
