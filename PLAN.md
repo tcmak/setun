@@ -192,8 +192,8 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 2.2 Group accumulate and scale [M] · *S1*
 - **Do:** accumulate G/L beats into a group partial sum; multiply by the group scale (fixed-point or FP16 → fixed); accumulate across groups in wide fixed-point; end-of-row flag; handle K not a multiple of G.
 - **Accept:**
-  - [ ] bit-exact vs golden for K ∈ {1, 7, 127, 128, 129, 2048, 6144} × G ∈ {64, 128, 256} × L ∈ {16, 64, 128}
-  - [ ] multiplier count per row documented (DSP use is allowed in this stage only)
+  - [X] bit-exact vs golden for K ∈ {1, 7, 127, 128, 129, 2048, 6144} × G ∈ {64, 128, 256} × L ∈ {16, 64, 128}
+  - [X] multiplier count per row documented (DSP use is allowed in this stage only)
 
 ### 2.3 Weight unpacker [S–M] · *S2*
 - **Do:** packed beat (e.g. 256-bit) → L trits and aligned scale stream; separate optional 5-trits-per-byte decoder (LUT).
