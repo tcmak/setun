@@ -9,3 +9,9 @@ dist/
 sim_build/
 *.vcd
 *.fst
+
+# Editor backups
+*~
+.*.un~
+*.swp
+*.swo
