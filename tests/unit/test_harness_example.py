@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from migen import Module, Signal
+from migen.genlib.fifo import SyncFIFO
 
 from tests.sim_helper import run_cocotb_verilator, run_migen_sim
 
@@ -69,3 +70,17 @@ def test_cocotb_verilator_failure_logs_seed_and_keeps_fst() -> None:
     fst_path = Path(m.group(1))
     assert fst_path.exists(), f"Expected FST file at {fst_path}"
     shutil.rmtree(fst_path.parent, ignore_errors=True)
+
+
+@pytest.mark.skipif(shutil.which("verilator") is None, reason="verilator not installed")
+def test_cocotb_verilator_fifo_passes() -> None:
+    dut = SyncFIFO(width=8, depth=4)
+    ios = {dut.din, dut.we, dut.writable, dut.dout, dut.re, dut.readable}
+    run_cocotb_verilator(
+        dut=dut,
+        ios=ios,
+        test_module="unit.cocotb_fifo_tb",
+        toplevel="example_sync_fifo",
+        testcase="tb_sync_fifo_pass",
+        seed=4242,
+    )

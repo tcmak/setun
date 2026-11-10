@@ -19,7 +19,8 @@ def run_migen_sim(
     vcd_name: str | None = None,
 ) -> None:
     """Run Migen's built-in Python simulator for tiny combinational/sequential checks."""
-    run_simulation(dut, testbench, vcd_name=vcd_name)
+    gen = testbench() if callable(testbench) else testbench
+    run_simulation(dut, gen, vcd_name=vcd_name)
 
 
 def run_cocotb_verilator(
