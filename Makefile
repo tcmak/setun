@@ -35,3 +35,9 @@ ci:
 nightly:
 	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock --banner
 	pytest tests/
+
+resource-report:
+	$(PYTHON) scripts/resource_report.py
+
+resource-check:
+	$(PYTHON) scripts/resource_report.py --check-baseline

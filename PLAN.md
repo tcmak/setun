@@ -216,10 +216,10 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 2.6 Resource and Fmax characterization [M] · *S1*
 - **Do:** scripted Yosys runs (generic and `synth_xilinx` for LUT6 counts); sweep R, L, G, A; write `reports/resources.md` and `.json`; CI compares against `reports/baseline.json`.
 - **Accept:**
-  - [ ] `make resource-report` reproduces the tables
-  - [ ] CI fails if LUTs-per-MAC regresses > 10% **(initial)**
-  - [ ] the report states how many MACs/cycle fit the small-board candidates at ≥ 100 MHz
-  - [ ] the report states the ops/cycle needed to match the memory beat rate (rule of thumb: extra MACs beyond the weight-stream rate are wasted)
+  - [X] `make resource-report` reproduces the tables
+  - [X] CI fails if LUTs-per-MAC regresses > 10% **(initial)**
+  - [X] the report states how many MACs/cycle fit the small-board candidates at ≥ 100 MHz
+  - [X] the report states the ops/cycle needed to match the memory beat rate (rule of thumb: extra MACs beyond the weight-stream rate are wasted)
 
 ### 2.7 Optional: table-lookup variant [L] · *deferred*
 - **Do:** TeLLMe-style table-lookup ternary matmul (grouped activations, precomputed partial sums) behind the same interface as 2.4.
