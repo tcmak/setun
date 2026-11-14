@@ -57,21 +57,31 @@ def probe_pkg_version(pkg: str) -> str:
         return "MISSING"
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
 def probe_git_pkg(pkg: str) -> str:
-    spec = importlib.util.find_spec(pkg)
-    if spec is None or spec.origin is None:
-        return "MISSING"
-    pkg_dir = Path(spec.origin).resolve().parent
-    commit = get_cmd_output(["git", "-C", str(pkg_dir), "rev-parse", "HEAD"])
-    if commit:
-        return commit
+    # 1. Check PEP 610 direct_url.json first (pip install git+https://...)
     for dist in importlib.metadata.distributions():
-        if dist.metadata["Name"] and dist.metadata["Name"].lower() == pkg.lower():
+        name = dist.metadata["Name"]
+        if name and name.lower().replace("-", "_") == pkg.lower().replace("-", "_"):
             direct_url = dist.read_text("direct_url.json")
             if direct_url:
                 m = re.search(r'"commit_id"\s*:\s*"([0-9a-f]{40})"', direct_url)
                 if m:
                     return m.group(1)
+
+    # 2. Check editable git checkout only if its top-level is not REPO_ROOT
+    spec = importlib.util.find_spec(pkg)
+    if spec is None or spec.origin is None:
+        return "MISSING"
+    pkg_dir = Path(spec.origin).resolve().parent
+    toplevel = get_cmd_output(["git", "-C", str(pkg_dir), "rev-parse", "--show-toplevel"])
+    if toplevel and Path(toplevel).resolve() != REPO_ROOT:
+        commit = get_cmd_output(["git", "-C", str(pkg_dir), "rev-parse", "HEAD"])
+        if commit:
+            return commit
+
     return "INSTALLED_NON_GIT"
 
 

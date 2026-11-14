@@ -18,9 +18,7 @@ ROW_CASES_PER_CFG = 100_000 if NIGHTLY else 500
 
 DOT_LANES = [16, 64, 128] if NIGHTLY else [64]
 ROW_CFGS = (
-    [(128, 128, 64, 0), (129, 128, 64, 4), (256, 64, 16, 6)]
-    if NIGHTLY
-    else [(129, 128, 64, 4)]
+    [(128, 128, 64, 0), (129, 128, 64, 4), (256, 64, 16, 6)] if NIGHTLY else [(129, 128, 64, 4)]
 )
 
 

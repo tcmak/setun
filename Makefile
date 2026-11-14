@@ -1,4 +1,4 @@
-.PHONY: doctor doctor-lock lint format test sim-smoke ci nightly
+.PHONY: doctor doctor-lock lint format test sim-smoke resource-report resource-check ci nightly
 
 PYTHON ?= python3
 
@@ -26,22 +26,22 @@ sim-smoke:
 		echo "[sim-smoke] targets/sim.py not yet implemented (scheduled for Task 0.3)"; \
 	fi
 
-ci:
-	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock --banner
-	$(MAKE) lint
-	$(MAKE) test
-	$(MAKE) sim-smoke
-
-nightly:
-	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock --banner
-	pytest tests/
-
 resource-report:
 	$(PYTHON) scripts/resource_report.py
 
 resource-check:
 	$(PYTHON) scripts/resource_report.py --check-baseline
 
-nightly: doctor lint resource-check
+ci:
+	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock --banner
+	$(MAKE) lint
+	$(MAKE) test
+	$(MAKE) resource-check
+	$(MAKE) sim-smoke
+
+nightly:
+	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock --banner
+	$(MAKE) lint
+	$(MAKE) resource-check
 	SETUN_NIGHTLY=1 $(PYTHON) -m pytest tests/unit
 	$(MAKE) sim-smoke
