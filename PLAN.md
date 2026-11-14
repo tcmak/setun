@@ -231,8 +231,8 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 2.8 Randomized regression suite [S] · *S1 · S2*
 - **Do:** seeds, small PR configs and large nightly configs.
 - **Accept:**
-  - [ ] nightly runs ≥ 10⁵ random cases per config with zero mismatches
-  - [ ] a failing seed is printed and replayable with one command
+  - [X] nightly runs ≥ 10⁵ random cases per config with zero mismatches
+  - [X] a failing seed is printed and replayable with one command
 
 ### 2.9 Optional: formal properties for stream handshakes [M] · *deferred*
 - **Accept:**

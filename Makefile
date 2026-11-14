@@ -41,3 +41,7 @@ resource-report:
 
 resource-check:
 	$(PYTHON) scripts/resource_report.py --check-baseline
+
+nightly: doctor lint resource-check
+	SETUN_NIGHTLY=1 $(PYTHON) -m pytest tests/unit
+	$(MAKE) sim-smoke
