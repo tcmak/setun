@@ -20,7 +20,7 @@ Draft 0.3 · 2026-10-17 (renamed to Setun) · companion to [README.md](README.md
 
 **Goal:** Build the multi-row `TernaryTile` accelerator, wrap it as a LiteX CSR + DMA peripheral in `SimSoC`, and generate 16 bit-exact tokens from the M0 tiny ternary transformer (**Gate 3**).
 
-- [ ] **Block A — M0 Reference & Toy Weights:**
+- [X] **Block A — M0 Reference & Toy Weights:**
   - `1.5` Tiny ternary transformer M0 in pure NumPy (`setun/ref/m0.py`)
   - `1.6` Deterministic M0 toy weight generator (`scripts/make_toy_model.py`, < 1 MB)
 - [ ] **Block B — Tile Datapath RTL:**

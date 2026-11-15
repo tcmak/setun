@@ -146,17 +146,17 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 1.5 Golden integer model [L] · *S2 (M0) · Track A (M1)*
 - **Do:** integer-exact decoder in NumPy: embeddings, norms, QK-norm, RoPE, GQA attention with KV cache, FFN, head, greedy sampling; per-op trace hooks.
 - **Accept:**
-  - [ ] M0: final hidden state matches an FP32 reference with cosine ≥ 0.999 **(initial)**
+  - [X] M0: final hidden state matches an FP32 reference with cosine ≥ 0.999 **(initial)**
   - [ ] M1: perplexity on a fixed 20k-token sample within +2% of the reference runtime **(initial)**
   - [ ] M1: top-1 next-token agreement ≥ 95% over 5k positions **(initial)**
-  - [ ] any miss is explained and bounded in `NUMERICS.md`
+  - [X] any miss is explained and bounded in `NUMERICS.md`
 
 ### 1.6 Toy model generator [M] · *S2*
 - **Do:** `scripts/make_toy.py`: seeded random model with M1's *structure* (GQA, norm type, FFN type, tied embeddings) at tiny dims (e.g. d_model 64, 2 layers, 4 heads / 2 KV heads, vocab 256); writes the internal format plus float source weights. Sizes `tiny` (CI) and `small` (nightly).
 - **Accept:**
-  - [ ] same seed → same SHA256
-  - [ ] golden model runs on it; logits are not degenerate (entropy within a documented range)
-  - [ ] note in `models.md`: random weights have no activation outliers, so error budgets are judged on M1, not M0
+  - [X] same seed → same SHA256
+  - [X] golden model runs on it; logits are not degenerate (entropy within a documented range)
+  - [X] note in `models.md`: random weights have no activation outliers, so error budgets are judged on M1, not M0
 
 ### 1.7 Golden vector exporter [M] · *Track A*
 - **Do:** per-op test vectors (inputs, outputs, hex) for several shapes into `tests/vectors/`, with manifest and SHA256.
