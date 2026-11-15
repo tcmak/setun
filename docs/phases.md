@@ -79,9 +79,9 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 0.4 CSR peripheral stub in SimSoC [M] · *S2*
 - **Do:** `setun/accelerators/stub.py` with ID, VERSION, SCRATCH and COUNTER CSRs; enabled by `--with-accel-stub`; export `csr.json`.
 - **Accept:**
-  - [ ] a test reads ID/VERSION through the real bus in sim (firmware or Etherbone/host path)
-  - [ ] SCRATCH read-back verified with ≥ 100 random 32-bit patterns
-  - [ ] addresses come from `csr.json`; none are hard-coded
+  - [X] a test reads ID/VERSION through the real bus in sim (firmware or Etherbone/host path)
+  - [X] SCRATCH read-back verified with ≥ 100 random 32-bit patterns
+  - [X] addresses come from `csr.json`; none are hard-coded
 
 ### 0.5 Unit-test harness for Migen modules [M] · *S1*
 - **Do:** helper that converts a Migen module to Verilog and runs it under cocotb + Verilator via pytest; Migen's own simulator for tiny combinational tests; seed logging (`TEST_SEED`); FST waveform on failure.

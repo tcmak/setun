@@ -21,7 +21,7 @@ test:
 
 sim-smoke:
 	@if [ -f targets/sim.py ]; then \
-		$(PYTHON) -m targets.sim; \
+		$(PYTHON) -m targets.sim --with-accel-stub; \
 	else \
 		echo "[sim-smoke] targets/sim.py not yet implemented (scheduled for Task 0.3)"; \
 	fi
