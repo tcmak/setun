@@ -1,4 +1,4 @@
-# Setun Ternary Datapath Resource & Throughput Report (Task 2.6)
+# Setun Ternary Datapath Resource & Throughput Report (Default 1 DSP/row Mode) (Task 2.6)
 
 Synthesized via Yosys (`synth_xilinx -family xc7 -noiopad`).
 
@@ -31,5 +31,6 @@ $$\text{Max useful MACs/cycle at } 100\text{ MHz} = \frac{B_{mem} \times 10^9}{0
 | Zynq US+ XCK26 (Kria KV260) | 117,120 | 1248 | 9.6 | 34 | 2,176 | 384 |
 
 ### Key Architectural Takeaways (Gate 2 / G1)
-- **Zero DSPs in `TernaryDot`:** All multipliers live strictly in the per-group scale stage (`1 DSP48E1` per row).
+- **Zero DSPs in `TernaryDot`:** All ternary MAC lanes are multiplier-free add/sub trees.
+- **Group Scale DSP Mode:** 1 DSP48E1 per row for u16 group scale dequantization.
 - **Memory-bound regime:** Even on the smallest Artix-7 (`XC7A35T`), compute fabric fits more MACs/cycle than external DDR3/SPI weight bandwidth can feed at 100 MHz—confirming that memory burst efficiency (`Phase 3.2`) governs token throughput.

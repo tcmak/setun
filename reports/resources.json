@@ -11,7 +11,8 @@
       "ffs": 66,
       "dsps": 1,
       "luts_per_mac": 40.312,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     },
     {
       "rows": 1,
@@ -23,7 +24,8 @@
       "ffs": 68,
       "dsps": 1,
       "luts_per_mac": 40.562,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     },
     {
       "rows": 1,
@@ -35,7 +37,8 @@
       "ffs": 66,
       "dsps": 1,
       "luts_per_mac": 42.141,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     },
     {
       "rows": 1,
@@ -47,7 +50,8 @@
       "ffs": 68,
       "dsps": 1,
       "luts_per_mac": 42.25,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     },
     {
       "rows": 1,
@@ -59,7 +63,8 @@
       "ffs": 49,
       "dsps": 1,
       "luts_per_mac": 39.141,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     },
     {
       "rows": 1,
@@ -71,7 +76,8 @@
       "ffs": 74,
       "dsps": 1,
       "luts_per_mac": 76.141,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     },
     {
       "rows": 4,
@@ -83,7 +89,8 @@
       "ffs": 264,
       "dsps": 4,
       "luts_per_mac": 42.141,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     },
     {
       "rows": 8,
@@ -95,7 +102,8 @@
       "ffs": 528,
       "dsps": 8,
       "luts_per_mac": 42.141,
-      "dsps_per_row": 1.0
+      "dsps_per_row": 1.0,
+      "nodsp": false
     }
   ]
 }

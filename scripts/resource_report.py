@@ -54,12 +54,19 @@ class SynthMetrics:
     dsps: int
     luts_per_mac: float
     dsps_per_row: float
+    nodsp: bool = False
 
 
-def _synthesize_single_row(lanes: int, group_size: int, act_bits: int) -> tuple[int, int, int]:
+def _synthesize_single_row(
+    lanes: int,
+    group_size: int,
+    act_bits: int,
+    nodsp: bool = False,
+) -> tuple[int, int, int]:
     """Run Yosys synth_xilinx on one TernaryRow and return (luts, ffs, dsps)."""
     dut = TernaryRow(group_size=group_size, lanes=lanes, act_bits=act_bits)
-    top_name = f"ternary_row_L{lanes}_G{group_size}_A{act_bits}"
+    mode_suffix = "_nodsp" if nodsp else ""
+    top_name = f"ternary_row_L{lanes}_G{group_size}_A{act_bits}{mode_suffix}"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -69,13 +76,14 @@ def _synthesize_single_row(lanes: int, group_size: int, act_bits: int) -> tuple[
         v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
         v_out.write(str(v_path))
 
+        nodsp_flag = " -nodsp" if nodsp else ""
         cmd = [
             "yosys",
             "-q",
             "-p",
             (
                 f"read_verilog {v_path}; "
-                f"synth_xilinx -family xc7 -top {top_name} -noiopad; "
+                f"synth_xilinx -family xc7 -top {top_name} -noiopad{nodsp_flag}; "
                 f"tee -q -o {json_path} stat -json"
             ),
         ]
@@ -95,7 +103,7 @@ def _synthesize_single_row(lanes: int, group_size: int, act_bits: int) -> tuple[
     return luts, ffs, dsps
 
 
-def run_sweep() -> list[SynthMetrics]:
+def run_sweep(nodsp: bool = False) -> list[SynthMetrics]:
     """Synthesize unique (L, G, A) rows once and compute metrics for all (R, L, G, A)."""
     if shutil.which("yosys") is None:
         raise RuntimeError("yosys not found in PATH; run inside configured WSL2 environment.")
@@ -106,7 +114,7 @@ def run_sweep() -> list[SynthMetrics]:
     for rows, lanes, group_size, act_bits in SWEEP_CONFIGS:
         key = (lanes, group_size, act_bits)
         if key not in row_cache:
-            row_cache[key] = _synthesize_single_row(lanes, group_size, act_bits)
+            row_cache[key] = _synthesize_single_row(lanes, group_size, act_bits, nodsp=nodsp)
         row_luts, row_ffs, row_dsps = row_cache[key]
 
         total_luts = rows * row_luts
@@ -126,17 +134,20 @@ def run_sweep() -> list[SynthMetrics]:
                 dsps=total_dsps,
                 luts_per_mac=round(total_luts / macs, 3),
                 dsps_per_row=round(total_dsps / rows, 2),
+                nodsp=nodsp,
             )
         )
     return results
 
 
-def render_markdown(metrics: list[SynthMetrics]) -> str:
+def render_markdown(metrics: list[SynthMetrics], nodsp: bool = False) -> str:
     """Format resource sweep, board capacity, and memory-bandwidth analysis as Markdown."""
+    title_suffix = " (LUT-Only / -nodsp Mode)" if nodsp else " (Default 1 DSP/row Mode)"
+    nodsp_flag = " -nodsp" if nodsp else ""
     lines = [
-        "# Setun Ternary Datapath Resource & Throughput Report (Task 2.6)",
+        f"# Setun Ternary Datapath Resource & Throughput Report{title_suffix} (Task 2.6)",
         "",
-        "Synthesized via Yosys (`synth_xilinx -family xc7 -noiopad`).",
+        f"Synthesized via Yosys (`synth_xilinx -family xc7 -noiopad{nodsp_flag}`).",
         "",
         "## 1. Configuration Sweep (`R × L × G × A`)",
         "",
@@ -175,8 +186,11 @@ def render_markdown(metrics: list[SynthMetrics]) -> str:
 
     for b in CANDIDATE_BOARDS:
         max_rows_lut = int((b["luts"] * 0.80) // ref.luts)
-        max_rows_dsp = int(b["dsps"] // max(ref.dsps, 1))
-        fit_rows = min(max_rows_lut, max_rows_dsp)
+        if ref.dsps > 0:
+            max_rows_dsp = int(b["dsps"] // ref.dsps)
+            fit_rows = min(max_rows_lut, max_rows_dsp)
+        else:
+            fit_rows = max_rows_lut
         fit_macs = fit_rows * ref.lanes
         bw_macs = int(round((b["mem_gbps"] * 1e9) / (0.25 * fmax_mhz * 1e6)))
         lines.append(
@@ -184,12 +198,20 @@ def render_markdown(metrics: list[SynthMetrics]) -> str:
             f"{fit_rows} | {fit_macs:,} | {bw_macs:,} |"
         )
 
+    dsp_mode_desc = (
+        "0 DSPs via Yosys -nodsp LUT multipliers"
+        if nodsp
+        else "1 DSP48E1 per row for u16 group scale dequantization"
+    )
     lines.extend(
         [
             "",
             "### Key Architectural Takeaways (Gate 2 / G1)",
-            "- **Zero DSPs in `TernaryDot`:** All multipliers live strictly in the per-group "
-            "scale stage (`1 DSP48E1` per row).",
+            (
+                "- **Zero DSPs in `TernaryDot`:** All ternary MAC lanes "
+                "are multiplier-free add/sub trees."
+            ),
+            f"- **Group Scale DSP Mode:** {dsp_mode_desc}.",
             "- **Memory-bound regime:** Even on the smallest Artix-7 (`XC7A35T`), compute fabric "
             "fits more MACs/cycle than external DDR3/SPI weight bandwidth can feed at 100 MHz—"
             "confirming that memory burst efficiency (`Phase 3.2`) governs token throughput.",
@@ -233,7 +255,7 @@ def check_baseline(
         raise RuntimeError("Resource regression detected:\n  " + "\n  ".join(regressions))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Setun Yosys Resource & Fmax Report Generator")
     parser.add_argument(
         "--update-baseline",
@@ -245,17 +267,23 @@ def main() -> int:
         action="store_true",
         help="Verify <= 10% LUT/MAC regression",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--nodsp",
+        action="store_true",
+        help="Synthesize without DSP48E1 slices (-nodsp LUT multiplier mode)",
+    )
+    args = parser.parse_args(argv)
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    metrics = run_sweep()
+    metrics = run_sweep(nodsp=args.nodsp)
+    nodsp_flag = " -nodsp" if args.nodsp else ""
     payload = {
-        "synth_flow": "yosys synth_xilinx -family xc7 -noiopad",
+        "synth_flow": f"yosys synth_xilinx -family xc7 -noiopad{nodsp_flag}",
         "configs": [asdict(m) for m in metrics],
     }
 
     DEFAULT_JSON.write_text(json.dumps(payload, indent=2) + "\n")
-    DEFAULT_MD.write_text(render_markdown(metrics))
+    DEFAULT_MD.write_text(render_markdown(metrics, nodsp=args.nodsp))
     print(f"[resource-report] Wrote {DEFAULT_MD} and {DEFAULT_JSON}")
 
     if args.update_baseline:

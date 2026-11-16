@@ -106,3 +106,30 @@ Step 3: Serialized Binary Bytes (42 bytes total = 24B header + 16B trits + 2B sc
 Header (24 bytes): 53 54 4e 57 ("STNW") 01 (ver=1) 08 (shift=8) 40 00 (G=64) 01 00 00 00 (N=1) 06 00 00 00 (K=6) 01 00 00 00 (n_groups=1) 00 00 00 00 (reserved=0)
 Packed trits (16 bytes): 49 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 Scales (2 bytes, LE): 80 01
+
+---
+
+## 6. Planned Migration to VeriObjC `VTPE v1` (Preparation — Blocked on VeriObjC Task 5.6)
+
+> **Status (`VTPE` Spec §12.5):** **PREPARATION ONLY — BLOCKED on `VeriObjC` Task 5.6 (`rt/` layout reconciliation).**
+> Until `VeriObjC` reconciles its `rt/` C header layout and `setun/ref/format.py` is rewritten and verified against the dual-profile golden corpus, `setun`'s internal `STNW` / `STM0` framing and `VTPE` **coexist and must not be claimed unified**.
+
+### 6.1 Concept Mapping (`STNW` / `STM0` → `VTPE v1`)
+
+The 2-bit LSB-first ternary weight payload (`{00: 0, 01: +1, 10: -1, 11: reserved/reject}`, 4 trits/byte, zero-padded tail lanes) is already byte-identical between `STNW` and `VTPE v1` §3. Only the outer container framing and section tags will migrate once `VeriObjC` Task 5.6 lands:
+
+| Current `setun` Artifact (`STNW` / `STM0`) | Target `VTPE v1` Construct | Profile (`flags` bit 2) | Notes |
+|---|---|---|---|
+| `STNW` 24-byte header (`magic="STNW"`) | `VTPE` 32-byte header (`magic="VTPE"`, FNV-1a-32 over `0x00..0x0B`, `artifact_id`) | Both (`0` or `1`) | Position-independent, little-endian, FNV-1a-32 framed |
+| `packed_trits` (`uint8[N, n_groups, G//4]`) | Section Tag `0x0001` (`weights`) + `0x0003` (`arch descriptor`) | Both (`0` or `1`) | Identical 2-bit LSB-first packing; `0b11` and non-zero padding rejected |
+| Power-of-two tensor shift (`scale_u16 = 1`, `shift`) | Section Tag `0x0002` (`scales`: `s16` exponent per tensor) | `VTPE-Core` (`bit 2 = 0`) | Strict `DSP=0` shift-only profile produced by `TernaryTape.jl` |
+| `scales` (`uint16[N, n_groups]`, `G ∈ {64, 128, 256}`) + `shift` | Section Tag `0x0006` (`group_scales_u16`, explicit `G` in payload) | `VTPE-Grouped` (`bit 2 = 1`) | Requires consumer multiply (1 DSP48E1/row or `-nodsp` LUT multiplier) |
+| `STM0` FP32 `tok_embeddings` & `rms_norm` vectors | Section Tag `0x0007` (`fp32_aux`) | `VTPE-Grouped` (`bit 2 = 1`) | **Host-consumed only** (hybrid decode); never hardware-visible |
+| `m0_<size>_manifest.json` | Section Tag `0x0004` (`manifest`) | Optional (`bit 1 = 1`) | Length-prefixed ASCII provenance fields |
+
+### 6.2 Dual-Consumer Design Sketch (`setun` Loader & Datapath)
+
+When `setun/ref/format.py` migrates to `VTPE v1` after `VeriObjC` Task 5.6:
+1. **Framing & Rejection Gate (§8):** `deserialize_vtpe()` will validate the 32-byte header, FNV-1a-32 header/section checksums, section count/length invariants, reserved bits, and profile tag rules (`0x0006`/`0x0007` legal if and only if `flags` bit 2 is set; `G ∈ {64, 128, 256}`), backed by an exhaustive per-byte mutation fuzz test.
+2. **`VTPE-Core` Execution (`flags` bit 2 = 0):** Loaded into `GroupAccumulateScale` in shift mode (`scale_u16 = 1`, `shift = -s16_exp` across a single group or replicated power-of-two shift across groups), requiring zero multipliers (`DSP=0`).
+3. **`VTPE-Grouped` Execution (`flags` bit 2 = 1):** Loaded into `GroupAccumulateScale` with per-group `u16` scales (`1 DSP48E1/row` by default, or `0 DSP` via Yosys `-nodsp`), while `0x0007` (`fp32_aux`) tensors stay on the host for hybrid non-linear ops.

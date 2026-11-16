@@ -135,6 +135,7 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
   - [X] pack → unpack is lossless on 10⁶ random tensors, including odd shapes and K not a multiple of G
   - [ ] for one real M1 tensor, GGUF → internal → dequantized floats equals the reference runtime's dequantization
   - [X] `FORMAT.md` contains a byte-exact worked example
+  - [ ] `VTPE v1` reconciliation (blocked on VeriObjC Task 5.6): rewrite loader for `VTPE-Core` (bit 2 = 0) and `VTPE-Grouped` (bit 2 = 1), pass exhaustive single-byte mutation rejection (§8), and verify a `VTPE-Core` golden tape through `GroupAccumulateScale` shift mode bit-exact vs. M0 golden
 
 ### 1.4 Numerics spec [L] · *S1 (dot, group scale) · Track A (rest)*
 - **Do:** `docs/NUMERICS.md`: profile definitions; activation quantization options (int8 per-token absmax; block-scaled int8/int16 with block B; FP16 passthrough); accumulator widths; group-scale application; RMSNorm and QK-norm (rsqrt method); RoPE table precision; softmax (exp approximation, normalization); SiLU/SwiGLU and ReLU²; residual-stream precision; head precision; sampling (argmax first).
