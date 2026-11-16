@@ -1,4 +1,129 @@
-Setun
-A LiteX-native ternary LLM toolchain: an NPU-style overlay and its compiler. Informal pitch: "CUDA for LiteX FPGAs". Named after the Setun, the 1958 Soviet ternary computer built at Moscow State University.
+# Setun
 
-Status: pre-alpha, planning only. Nothing here runs yet. Pace: hobby and learning project, under 5 h/week, organized into seasons. Plan: PLAN.md (seasons, sessions, acceptance criteria) · full task catalogue: docs/phases.md Facts checked: 2026-10-16. Model, board and LiteX facts below move fast; re-verify before relying on them.
+**A LiteX-native ternary LLM hardware accelerator overlay, golden reference model, and toolchain.**
+
+*Informal pitch: "CUDA for LiteX FPGAs". Named after the Setun (Сетунь), the 1958 balanced-ternary computer built at Moscow State University.*
+
+## Status & Roadmap
+
+* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` and full-chip `M0` cosimulation next).
+
+* **Facts Checked:** `2026-11-16`
+
+* **Planning & Governance:**
+
+  * [`PLAN.md`](PLAN.md) — Season roadmap, session blocks, and milestone gates.
+
+  * [`NEXT.md`](NEXT.md) — Immediate active engineering tasks.
+
+  * [`docs/phases.md`](docs/phases.md) — Full task catalogue and acceptance criteria checkboxes.
+
+  * [`docs/decisions.md`](docs/decisions.md) — Architecture Decision Records (`ADR-001` through `ADR-012`).
+
+  * [`docs/open-questions.md`](docs/open-questions.md) — Active cross-repo blockers (`OQ-001`).
+
+## Why Ternary LLMs on LiteX FPGAs?
+
+Single-batch autoregressive LLM decoding ($\text{batch size} = 1$) is fundamentally **memory-bandwidth bound**, not compute bound: every generated token streams the entire model weight matrix from external memory to perform a matrix-vector multiply ($\mathbf{y} = \mathbf{W}\mathbf{x}$).
+
+By constraining linear projection weights to balanced ternary values $w \in \{-1, 0, +1\}$ (BitNet b1.58 / Grouped `Q2_0`):
+
+1. **8x Memory Traffic Reduction vs. FP16:** Weights pack into **2 bits/trit** (4 weights per byte, LSB-first) plus compact per-group scales, drastically lowering the external DDR/SRAM bandwidth required per token.
+
+2. **Multiplier-Free Ternary MAC Lanes (`0 DSPs` in `TernaryDot`):** Multiplying a signed `int8` activation $x \in [-128, +127]$ by $w \in \{-1, 0, +1\}$ requires **zero hardware multipliers**—only a 2-to-1 multiplexer/negator per lane feeding a balanced binary adder tree in standard FPGA LUTs.
+
+3. **Abundant Compute Headroom on Low-Cost FPGAs:** A canonical 64-lane, 128-group `TernaryRow` synthesizes to **2,697 LUT6** (`42.14 LUTs/MAC`) on Xilinx 7-Series fabric. Even a small Artix-7 (`XC7A35T`) fits 6 parallel rows (**384 MACs/cycle** at $100\text{ MHz}$), exceeding the external DDR3 weight-streaming ceiling.
+
+## Architecture & How It Works
+
+### 1. Hardware Datapath (`setun/accelerators/` · Migen HDL)
+
+* **Dataflow Pipeline:**
+  `Packed 2-bit Trits` + `int8 Activations` $\longrightarrow$ **`TernaryDot` (**$L$ **lanes, 0 DSPs: LUT mux+add)** $\longrightarrow$ **`GroupAccumulateScale` (**$G$**, 1 DSP48E1/row or `-nodsp`)** $\longrightarrow$ **Wide Row Accumulator (`round-half-up >> shift`)**
+
+* **`TernaryDot` (`setun/accelerators/ternary_dot.py`):** Parametric $L$-lane ($L \in \{16, 32, 64, 128\}$) combinational/pipelined ternary dot-product engine with `valid`/`ready` stream handshaking. Uses **0 DSP slices** across all configurations. Exact bit-growth sizing ($\lceil \log_2(L \cdot 128 + 1) \rceil + 1$ bits; 15-bit signed output for $L=64$) prevents overflow even at the corner case $x = -128, w = -1 \implies +128$.
+
+* **`GroupAccumulateScale` & `TernaryRow` (`setun/accelerators/group_scale.py`):** Accumulates $G/L$ beats ($G \in \{64, 128, 256\}$) into a 16-bit signed group partial sum $P_g$, multiplies by the group's unsigned 16-bit scale (`scale_u16`), accumulates across groups along a matrix row, and applies a hardware-friendly round-half-up arithmetic right shift (`(acc + (1 << (shift - 1))) >> shift`).
+
+  * **DSP Usage Modes (`ADR-004`):** By default, Yosys maps the once-per-group $16\text{-bit} \times 16\text{-bit}$ scale multiply to **1 `DSP48E1` slice per row** (`2,697 LUT6, 66 FFs, 1 DSP48E1` at $L=64, G=128$). Passing `--nodsp` to `scripts/resource_report.py` (`synth_xilinx -nodsp`) maps the entire row to pure LUT fabric (**0 DSPs**, `3,300 LUT6, 114 FFs`).
+
+* **LiteX CSR Peripheral (`setun/accelerators/stub.py` & `targets/sim.py`):** `SetunSimSoC` integrates LiteX `AutoCSR` peripherals (`ID`, `VERSION`, `SCRATCH`, free-running cycle `COUNTER`) over a 32-bit Wishbone bus with automated `csr.json` address-map export.
+
+### 2. Numerics, Weight Format & Golden Model (`setun/ref/`)
+
+* **Bit-Exact Reference Ops (`setun/ref/ops.py`):** Executable Python/NumPy specification for `lane_select_code`, `ternary_dot`, `group_accumulate`, `apply_scale`, and `row_dot` (supporting ragged $K$ not divisible by $G$).
+
+* **Weight Packing & Binary Codec (`setun/ref/format.py` · `docs/FORMAT.md`):**
+
+  * Packs 2-bit trits LSB-first (`0b00: 0`, `0b01: +1`, `0b10: -1`, `0b11: reserved`) with per-group `uint16` scales ($G \in \{64, 128, 256\}$) and a shared right-shift exponent (`shift`).
+
+  * **Normative `0b11` Contract vs. Hardware Defense-in-Depth (`ADR-003`):** Rejecting the reserved code `0b11` (and any non-zero tail padding) on load is the strict software/loader contract (`unpack_trits_1d` raises `ValueError`). The hardware `TernaryDot` lane aliases `0b11 -> 0` strictly as silicon defense-in-depth against uninitialized bus/FIFO beats, never as a valid weight encoding.
+
+  * **Portfolio Alignment with `VeriObjC` `VTPE v1` (`OQ-001`):** Setun currently uses its interim `STNW` (tensor) and `STM0` (model bundle) headers. A planned migration to the cross-repo **`VTPE v1`** format (supporting both `VTPE-Core` `DSP=0` power-of-two shift tapes and `VTPE-Grouped` `u16` group-scale tapes) is documented in [`docs/FORMAT.md` §6](docs/FORMAT.md) and is currently **blocked on `VeriObjC` Task 5.6** (`rt/` layout and `0x0006` shared `shift` field reconciliation). Until that loader rewrite and conformance test land, `STNW`/`STM0` and `VTPE` coexist and are not claimed unified.
+
+* **`M0` Golden Transformer Decoder (`setun/ref/m0.py` & `scripts/make_toy.py`):**
+
+  * Complete 2-layer autoregressive decoder with `M1`'s modern architecture: Grouped-Query Attention (GQA) with KV cache, pre-attention & pre-FFN `RMSNorm`, per-head `QK-norm`, Rotary Position Embeddings (`RoPE`), `SwiGLU` FFN, and tied token embeddings / LM head.
+
+  * Supports both hardware-exact `"integer"` mode (per-token symmetric `int8` absmax activation quantization + integer `row_dot`) and `"fp32"` reference mode, achieving $> 0.99998$ **hidden-state cosine similarity** and deterministic SHA256 toy weight generation (`tiny` and `small` presets).
+
+## Repository Layout
+
+* **`setun/accelerators/`** — Migen RTL modules (`TernaryDot`, `GroupAccumulateScale`, `TernaryRow`, `AccelStub`).
+
+* **`setun/ref/`** — Golden Python/NumPy reference ops (`ops.py`), pack/unpack binary codec (`format.py`), and `M0` decoder (`m0.py`).
+
+* **`setun/sim/`** — Reusable `cocotb` + Verilator simulation runner and Wishbone bus helpers.
+
+* **`targets/sim.py`** — LiteX `SetunSimSoC` target with Wishbone interconnect and `csr.json` exporter.
+
+* **`scripts/`** — Toolchain verifier (`doctor.py`), deterministic `M0` weight generator (`make_toy.py`), and Yosys XC7 resource characterization (`resource_report.py`).
+
+* **`tests/unit/`** — `pytest` + Verilator `cocotb` testbenches and randomized regression sweeps.
+
+* **`docs/`** — Architecture specs (`FORMAT.md`, `NUMERICS.md`, `models.md`, `FIELD_GUIDE.md`, `decisions.md`, `open-questions.md`, `phases.md`).
+
+* **`reports/`** — Generated Yosys resource characterization tables (`resources.md`, `resources.json`) and `baseline.json`.
+
+## Quickstart & Usage
+
+### 1. Environment Setup (WSL2 Ubuntu / Linux)
+
+Setun uses a pinned Python virtual environment (`.venv`) alongside system `verilator` (`5.020`) and `yosys` (`0.33`). Verify your toolchain health with:
+
+* `source .venv/bin/activate`
+
+* `make doctor`
+
+### 2. Run the Test Suite & CI Gates
+
+* **Format and lint (`ruff check` + `ruff format`):** `make format && make lint`
+
+* **Run fast CI suite (unit tests, `M0` golden model, LiteX CSR sim, Verilator RTL tests):** `make ci`
+
+* **Run LiteX `SetunSimSoC` smoke build & CSR map generation:** `make sim-smoke`
+
+* **Run full 600,000+ vector Verilator hardware regression + Yosys resource gate:** `make nightly`
+
+### 3. Generate Deterministic `M0` Toy Models
+
+* **Tiny preset (CI,** $d_{\text{model}}=64, G=64$**):** `python3 -m scripts.make_toy --size tiny`
+
+* **Small preset (Nightly,** $d_{\text{model}}=128, G=128$**):** `python3 -m scripts.make_toy --size small`
+
+### 4. Run Yosys FPGA Resource Characterization
+
+* **Default mode (`1 DSP48E1` per row for group scaling) + check** $\le 10\%$ **LUT/MAC baseline gate:** `make resource-check`
+
+* **Optional LUT-only mode (`0 DSP48E1` anywhere via Yosys `-nodsp`):** `python3 -m scripts.resource_report --nodsp`
+
+## Engineering & Contribution Discipline
+
+1. **Golden Reference First:** No RTL module is written before its exact integer math and bit-width equations are defined in `docs/NUMERICS.md` and implemented with unit tests in `setun/ref/`.
+
+2. **Bit-Exact Cosimulation:** Every Migen hardware module under `setun/accelerators/` must pass Verilator + `cocotb` equivalence tests (including randomized backpressure, `-128` saturation corners, zero scales, and ragged dimensions) against `setun/ref/`.
+
+3. **Zero Unverified Claims:** Resource numbers (`LUT6`, `FF`, `DSP48E1`) and numerical accuracy bounds (`cosine`, `entropy`, `perplexity`) are generated by reproducible scripts in `scripts/` and enforced in CI.
+
+4. **Formatting & Linting:** All commits must pass `make format && make lint` (`ruff` targeting Python 3.10+ compatibility, 100-column line limit) and `make ci` before merge.
+

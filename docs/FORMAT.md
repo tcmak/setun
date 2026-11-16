@@ -121,9 +121,9 @@ The 2-bit LSB-first ternary weight payload (`{00: 0, 01: +1, 10: -1, 11: reserve
 | Current `setun` Artifact (`STNW` / `STM0`) | Target `VTPE v1` Construct | Profile (`flags` bit 2) | Notes |
 |---|---|---|---|
 | `STNW` 24-byte header (`magic="STNW"`) | `VTPE` 32-byte header (`magic="VTPE"`, FNV-1a-32 over `0x00..0x0B`, `artifact_id`) | Both (`0` or `1`) | Position-independent, little-endian, FNV-1a-32 framed |
-| `packed_trits` (`uint8[N, n_groups, G//4]`) | Section Tag `0x0001` (`weights`) + `0x0003` (`arch descriptor`) | Both (`0` or `1`) | Identical 2-bit LSB-first packing; `0b11` and non-zero padding rejected |
+| `packed_trits` (`uint8[N, n_groups, G//4]`) | Section Tag `0x0001` (`weights`) + `0x0003` (`arch descriptor`) | Both (`0` or `1`) | Identical 2-bit LSB-first packing; loader rejection of `0b11` is the contract (RTL `0b11 -> 0` mux is defense-in-depth only) |
 | Power-of-two tensor shift (`scale_u16 = 1`, `shift`) | Section Tag `0x0002` (`scales`: `s16` exponent per tensor) | `VTPE-Core` (`bit 2 = 0`) | Strict `DSP=0` shift-only profile produced by `TernaryTape.jl` |
-| `scales` (`uint16[N, n_groups]`, `G ∈ {64, 128, 256}`) + `shift` | Section Tag `0x0006` (`group_scales_u16`, explicit `G` in payload) | `VTPE-Grouped` (`bit 2 = 1`) | Requires consumer multiply (1 DSP48E1/row or `-nodsp` LUT multiplier) |
+| `scales` (`uint16[N, n_groups]`, `G ∈ {64, 128, 256}`) + shared `shift` (`uint8`) | Section Tag `0x0006` (`group_scales_u16`: explicit `G`, shared `shift`, and `u16` mantissas) | `VTPE-Grouped` (`bit 2 = 1`) | Requires consumer multiply (`u16 * 2^-shift`); exact `0x0006` header field for shared `shift` to be pinned in Task 5.6 |
 | `STM0` FP32 `tok_embeddings` & `rms_norm` vectors | Section Tag `0x0007` (`fp32_aux`) | `VTPE-Grouped` (`bit 2 = 1`) | **Host-consumed only** (hybrid decode); never hardware-visible |
 | `m0_<size>_manifest.json` | Section Tag `0x0004` (`manifest`) | Optional (`bit 1 = 1`) | Length-prefixed ASCII provenance fields |
 

@@ -14,7 +14,7 @@ Status: Accepted for bit-packing; Container migration to VTPE v1 BLOCKED on Veri
 Decision:
 Encoding: 2-bit trits {00: 0, 01: +1, 10: -1, 11: reserved} with parametric group size G ∈ {64, 128, 256}.
 Packing Endianness (LSB-First): Trits are packed little-endian within each byte and across wide bus beats (trit[0] in bits[1:0], trit[1] in bits[3:2], ..., trit[i] in bits[2*i + 1 : 2*i]). This matches VeriObjC VTPE v1 §3 bit-for-bit.
-Reserved Code (11) Handling: The software unpacker (setun/ref/) rejects 11 (and non-zero tail padding) with a ValueError. The hardware TernaryDot lane aliases 11 -> 0 in the combinational datapath.
+Reserved Code (11) Handling (Contract vs. Defense-in-Depth): Loader rejection is the normative contract (both setun/ref/format.py and VeriObjC veriobjc_from_bytes per VTPE v1 §3 reject any tape containing 0b11 or non-zero tail padding before weights become hardware-visible). The hardware TernaryDot combinational mux aliases 0b11 -> 0 strictly as silicon defense-in-depth (deterministic safe fallback against uninitialized BRAM/FIFO beats), never as an accepted encoding.
 VTPE v1 Alignment (Spec §11 & §12.5): Setun currently uses its interim STNW/STM0 framing. Once VeriObjC Task 5.6 reconciles the authoritative rt/ header layout, Setun will migrate its container framing to VTPE v1 as a dual-profile consumer: supporting both VTPE-Core (flags bit 2 = 0, s16 power-of-two shift scales, DSP=0) and VTPE-Grouped (flags bit 2 = 1, tag 0x0006 group_scales_u16 + tag 0x0007 host-only fp32_aux). Until that loader rewrite and conformance test land, STNW/STM0 and VTPE coexist and are not claimed unified.
 
 ADR-004: Ternary Matmul Micro-Architecture
