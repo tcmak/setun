@@ -17,10 +17,10 @@ Packing Endianness (LSB-First): Trits are packed little-endian within each byte 
 Reserved Code (11) Handling (Contract vs. Defense-in-Depth): Loader rejection is the normative contract (both setun/ref/format.py and VeriObjC veriobjc_from_bytes per VTPE v1 §3 reject any tape containing 0b11 or non-zero tail padding before weights become hardware-visible). The hardware TernaryDot combinational mux aliases 0b11 -> 0 strictly as silicon defense-in-depth (deterministic safe fallback against uninitialized BRAM/FIFO beats), never as an accepted encoding.
 VTPE v1 Alignment (Spec §11 & §12.5): Setun currently uses its interim STNW/STM0 framing. Once VeriObjC Task 5.6 reconciles the authoritative rt/ header layout, Setun will migrate its container framing to VTPE v1 as a dual-profile consumer: supporting both VTPE-Core (flags bit 2 = 0, s16 power-of-two shift scales, DSP=0) and VTPE-Grouped (flags bit 2 = 1, tag 0x0006 group_scales_u16 + tag 0x0007 host-only fp32_aux). Until that loader rewrite and conformance test land, STNW/STM0 and VTPE coexist and are not claimed unified.
 
-ADR-004: Ternary Matmul Micro-Architecture
-Status: Accepted at S1.end (2026-11-14); Updated 2026-11-16 for VTPE Profile Boundary
-Decision: Multiplier-free add/sub tree in TernaryDot (0 DSPs per ternary MAC lane) paired with GroupAccumulateScale supporting both 1 DSP48E1 per row (default for VTPE-Grouped u16 scales) and 0 DSPs (via Yosys -nodsp LUT multiply, or shift-only mode for VTPE-Core power-of-two tapes).
-Evidence: Yosys synth_xilinx (xc7) confirms 2,697 LUT6 (42.14 LUTs/MAC) and 1 DSP48E1 for a canonical L=64, G=128, A=8 TernaryRow. Even small Artix-7 (XC7A35T) fabric fits 6 rows (384 MACs/cycle), exceeding the 64 MACs/cycle external memory bandwidth ceiling at 100 MHz. The DSP=0 claim applies strictly to TernaryDot MAC lanes and VTPE-Core shift-mode execution; VTPE-Grouped execution requires 1 multiply per row per group (1 DSP48E1 or -nodsp LUTs).
+ADR-004: Ternary Matmul Micro-Architecture (0-DSP Default, Opt-In Row DSP)
+Status: Accepted at S1.end (2026-11-14); Amended 2026-11-18 (0-DSP default, opt-in 1 DSP/row)
+Decision: Multiplier-free add/sub tree in TernaryDot (0 DSPs per ternary MAC lane) paired with GroupAccumulateScale defaulting to 0 DSPs (Yosys -nodsp LUT multiplier for VTPE-Grouped u16 scales, or shift-only mode for VTPE-Core power-of-two tapes) and supporting opt-in 1 DSP48E1 per row (--use-dsp) when hard DSP slices are abundant.
+Evidence: Yosys synth_xilinx (xc7) on a canonical L=64, G=128, A=8 TernaryRow measures 3,300 LUT6 / 0 DSP48E1 (51.56 LUTs/MAC) in default -nodsp mode and 2,697 LUT6 / 1 DSP48E1 (42.14 LUTs/MAC) in --use-dsp mode. Even on small Artix-7 (XC7A35T), pure LUT fabric fits 5 rows (320 MACs/cycle, 0 DSPs), still exceeding the 64 MACs/cycle external memory bandwidth ceiling at 100 MHz.
 
 ADR-005: Control Plane
 Status: Provisional (Decide in Track B)
@@ -51,3 +51,10 @@ Decision: Pre-converted 16-bit unsigned fixed-point mantissa (uint16) per group,
 ADR-012: Host Toolchain & Environment Pinning (Task 0.2a)
 Status: Accepted for Season 1
 Decision: Native Ubuntu/Debian (WSL2) system packages via apt (verilator, yosys, gtkwave) combined with a local Python virtual environment (.venv) pinned via toolchain.lock and verified by make doctor. Containerization (Dockerfile) is deferred to Task 0.2b.
+
+ADR-013: Cross-Portfolio Mythos-Loop Alignment & Season 3 HIL Parity Runner
+Status: Accepted (2026-11-18)
+Decision: Align Setun's synthesis, real-model evaluation, and board bring-up gates with the cross-repo VeriObjC / TernaryTape / veriStream-mythos loop:
+1. Task 2.6 characterizes XC7, Lattice ECP5, and Intel Cyclone V with 0-DSP (-nodsp) as the default baseline so ADR-007 board selection uses measured multi-vendor data.
+2. Season 4 Track A enforces a real-checkpoint PTQ quality gate (perplexity / probe accuracy on <= 1B weights) prior to the M1 demo, splitting hardware vs. QAT research tracks if generic PTQ collapses.
+3. Season 3 board bring-up (Etherbone / litex_server) doubles as the portfolio Hardware-in-the-Loop (HIL) parity runner against shared VTPE golden fixtures and the veriStream-mythos HLS reference.

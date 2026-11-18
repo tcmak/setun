@@ -1,5 +1,6 @@
 {
-  "synth_flow": "yosys synth_xilinx -family xc7 -noiopad",
+  "synth_flow": "yosys synth_xilinx -family xc7 -noiopad -nodsp",
+  "nodsp": true,
   "configs": [
     {
       "rows": 1,
@@ -7,12 +8,13 @@
       "group_size": 64,
       "act_bits": 8,
       "macs_per_cycle": 16,
-      "luts": 645,
-      "ffs": 66,
-      "dsps": 1,
-      "luts_per_mac": 40.312,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 1552,
+      "ffs": 114,
+      "dsps": 0,
+      "luts_per_mac": 97.0,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
     },
     {
       "rows": 1,
@@ -20,12 +22,13 @@
       "group_size": 128,
       "act_bits": 8,
       "macs_per_cycle": 16,
-      "luts": 649,
-      "ffs": 68,
-      "dsps": 1,
-      "luts_per_mac": 40.562,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 1528,
+      "ffs": 116,
+      "dsps": 0,
+      "luts_per_mac": 95.5,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
     },
     {
       "rows": 1,
@@ -33,12 +36,13 @@
       "group_size": 128,
       "act_bits": 8,
       "macs_per_cycle": 64,
-      "luts": 2697,
-      "ffs": 66,
-      "dsps": 1,
-      "luts_per_mac": 42.141,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 3300,
+      "ffs": 114,
+      "dsps": 0,
+      "luts_per_mac": 51.562,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
     },
     {
       "rows": 1,
@@ -46,12 +50,13 @@
       "group_size": 256,
       "act_bits": 8,
       "macs_per_cycle": 64,
-      "luts": 2704,
-      "ffs": 68,
-      "dsps": 1,
-      "luts_per_mac": 42.25,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 3487,
+      "ffs": 116,
+      "dsps": 0,
+      "luts_per_mac": 54.484,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
     },
     {
       "rows": 1,
@@ -59,12 +64,13 @@
       "group_size": 128,
       "act_bits": 8,
       "macs_per_cycle": 128,
-      "luts": 5010,
-      "ffs": 49,
-      "dsps": 1,
-      "luts_per_mac": 39.141,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 5656,
+      "ffs": 97,
+      "dsps": 0,
+      "luts_per_mac": 44.188,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
     },
     {
       "rows": 1,
@@ -72,12 +78,13 @@
       "group_size": 128,
       "act_bits": 16,
       "macs_per_cycle": 64,
-      "luts": 4873,
-      "ffs": 74,
-      "dsps": 1,
-      "luts_per_mac": 76.141,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 5838,
+      "ffs": 122,
+      "dsps": 0,
+      "luts_per_mac": 91.219,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
     },
     {
       "rows": 4,
@@ -85,12 +92,13 @@
       "group_size": 128,
       "act_bits": 8,
       "macs_per_cycle": 256,
-      "luts": 10788,
-      "ffs": 264,
-      "dsps": 4,
-      "luts_per_mac": 42.141,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 13200,
+      "ffs": 456,
+      "dsps": 0,
+      "luts_per_mac": 51.562,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
     },
     {
       "rows": 8,
@@ -98,12 +106,42 @@
       "group_size": 128,
       "act_bits": 8,
       "macs_per_cycle": 512,
-      "luts": 21576,
-      "ffs": 528,
-      "dsps": 8,
-      "luts_per_mac": 42.141,
-      "dsps_per_row": 1.0,
-      "nodsp": false
+      "luts": 26400,
+      "ffs": 912,
+      "dsps": 0,
+      "luts_per_mac": 51.562,
+      "dsps_per_row": 0.0,
+      "nodsp": true,
+      "vendor": "xc7"
+    }
+  ],
+  "multivendor_ref": [
+    {
+      "vendor": "xc7",
+      "flow": "yosys synth_xilinx -family xc7 -nodsp",
+      "logic_unit": "LUT6",
+      "logic_cells": 3300,
+      "ffs": 114,
+      "dsps": 0,
+      "cells_per_mac": 51.562
+    },
+    {
+      "vendor": "ecp5",
+      "flow": "yosys synth_ecp5 -nodsp",
+      "logic_unit": "LUT4",
+      "logic_cells": 4741,
+      "ffs": 114,
+      "dsps": 0,
+      "cells_per_mac": 74.078
+    },
+    {
+      "vendor": "cyclonev",
+      "flow": "yosys synth_intel_alm -family cyclonev -nodsp",
+      "logic_unit": "ALM/LCELL",
+      "logic_cells": 2677,
+      "ffs": 114,
+      "dsps": 0,
+      "cells_per_mac": 41.828
     }
   ]
 }
