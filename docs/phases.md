@@ -197,8 +197,8 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 2.3 Weight unpacker [S–M] · *S2*
 - **Do:** packed beat (e.g. 256-bit) → L trits and aligned scale stream; separate optional 5-trits-per-byte decoder (LUT).
 - **Accept:**
-  - [ ] bit-exact vs the 1.3 unpacker
-  - [ ] sustains 1 beat/cycle for 10⁵ beats under random back-pressure, with no bubble between groups
+  - [X] bit-exact vs the 1.3 unpacker
+  - [X] sustains 1 beat/cycle for 10⁵ beats under random back-pressure, with no bubble between groups
 
 ### 2.4 `TernaryTile`: R rows × L lanes GEMV engine [L] · *S2*
 - **Do:** activation buffer (BRAM/regs) broadcast to R row engines; weight and scale streams in; output stream with row index; parameters R, L, G; LiteX `stream.Endpoint` interfaces. Decode is GEMV (batch 1): activations stay put, weights stream.
