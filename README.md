@@ -8,7 +8,7 @@
 
 * **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` and full-chip `M0` cosimulation next).
 
-* **Facts Checked:** `2026-11-16`
+* **Facts Checked:** `2026-11-20`
 
 * **Planning & Governance:**
 
@@ -32,20 +32,20 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 2. **Multiplier-Free Ternary MAC Lanes (`0 DSPs` in `TernaryDot`):** Multiplying a signed `int8` activation $x \in [-128, +127]$ by $w \in \{-1, 0, +1\}$ requires **zero hardware multipliers**—only a 2-to-1 multiplexer/negator per lane feeding a balanced binary adder tree in standard FPGA LUTs.
 
-3. **Abundant Compute Headroom on Low-Cost FPGAs:** A canonical 64-lane, 128-group `TernaryRow` synthesizes to **2,697 LUT6** (`42.14 LUTs/MAC`) on Xilinx 7-Series fabric. Even a small Artix-7 (`XC7A35T`) fits 6 parallel rows (**384 MACs/cycle** at $100\text{ MHz}$), exceeding the external DDR3 weight-streaming ceiling.
+3. **Abundant Compute Headroom on Low-Cost FPGAs:** In default zero-DSP mode, a canonical 64-lane, 128-group `TernaryRow` synthesizes to **3,300 LUT6, 0 DSPs** (`51.56 LUTs/MAC`) on Xilinx 7-Series fabric (or **2,697 LUT6, 1 DSP48E1** with `--use-dsp` opt-in). Even a small Artix-7 (`XC7A35T`) fits 5 parallel rows (**320 MACs/cycle** at $100\text{ MHz}$ in zero-DSP mode), exceeding the external DDR3 weight-streaming ceiling.
 
 ## Architecture & How It Works
 
 ### 1. Hardware Datapath (`setun/accelerators/` · Migen HDL)
 
 * **Dataflow Pipeline:**
-  `Packed 2-bit Trits` + `int8 Activations` $\longrightarrow$ **`TernaryDot` (**$L$ **lanes, 0 DSPs: LUT mux+add)** $\longrightarrow$ **`GroupAccumulateScale` (**$G$**, 1 DSP48E1/row or `-nodsp`)** $\longrightarrow$ **Wide Row Accumulator (`round-half-up >> shift`)**
+  `Packed 2-bit Trits` + `int8 Activations` $\longrightarrow$ **`TernaryDot` (**$L$ **lanes, 0 DSPs: LUT mux+add)** $\longrightarrow$ **`GroupAccumulateScale` (**$G$**, 0 DSPs default or `--use-dsp` 1 DSP48E1/row)** $\longrightarrow$ **Wide Row Accumulator (`round-half-up >> shift`)**
 
 * **`TernaryDot` (`setun/accelerators/ternary_dot.py`):** Parametric $L$-lane ($L \in \{16, 32, 64, 128\}$) combinational/pipelined ternary dot-product engine with `valid`/`ready` stream handshaking. Uses **0 DSP slices** across all configurations. Exact bit-growth sizing ($\lceil \log_2(L \cdot 128 + 1) \rceil + 1$ bits; 15-bit signed output for $L=64$) prevents overflow even at the corner case $x = -128, w = -1 \implies +128$.
 
 * **`GroupAccumulateScale` & `TernaryRow` (`setun/accelerators/group_scale.py`):** Accumulates $G/L$ beats ($G \in \{64, 128, 256\}$) into a 16-bit signed group partial sum $P_g$, multiplies by the group's unsigned 16-bit scale (`scale_u16`), accumulates across groups along a matrix row, and applies a hardware-friendly round-half-up arithmetic right shift (`(acc + (1 << (shift - 1))) >> shift`).
 
-  * **DSP Usage Modes (`ADR-004`):** By default, Yosys maps the once-per-group $16\text{-bit} \times 16\text{-bit}$ scale multiply to **1 `DSP48E1` slice per row** (`2,697 LUT6, 66 FFs, 1 DSP48E1` at $L=64, G=128$). Passing `--nodsp` to `scripts/resource_report.py` (`synth_xilinx -nodsp`) maps the entire row to pure LUT fabric (**0 DSPs**, `3,300 LUT6, 114 FFs`).
+  * **DSP Usage Modes (`ADR-004`):** By default, synthesis runs in **zero-DSP mode** (`0 DSPs` across the entire row, mapping the once-per-group $16\text{-bit} \times 16\text{-bit}$ scale multiply to pure LUT fabric: `3,300 LUT6, 114 FFs, 0 DSP48E1` at $L=64, G=128$). Passing `--use-dsp` to `scripts/resource_report.py` opts into **1 `DSP48E1` slice per row** (`2,697 LUT6, 66 FFs, 1 DSP48E1`).
 
 * **LiteX CSR Peripheral (`setun/accelerators/stub.py` & `targets/sim.py`):** `SetunSimSoC` integrates LiteX `AutoCSR` peripherals (`ID`, `VERSION`, `SCRATCH`, free-running cycle `COUNTER`) over a 32-bit Wishbone bus with automated `csr.json` address-map export.
 
@@ -113,9 +113,9 @@ Setun uses a pinned Python virtual environment (`.venv`) alongside system `veril
 
 ### 4. Run Yosys FPGA Resource Characterization
 
-* **Default mode (`1 DSP48E1` per row for group scaling) + check** $\le 10\%$ **LUT/MAC baseline gate:** `make resource-check`
+* **Default zero-DSP mode (`0 DSP48E1` everywhere) + check** $\le 10\%$ **LUT/MAC baseline gate:** `make resource-check`
 
-* **Optional LUT-only mode (`0 DSP48E1` anywhere via Yosys `-nodsp`):** `python3 -m scripts.resource_report --nodsp`
+* **Opt-in 1-DSP/row mode (`1 DSP48E1` per row for group scaling via `--use-dsp`):** `python3 -m scripts.resource_report --use-dsp`
 
 ## Engineering & Contribution Discipline
 
