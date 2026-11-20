@@ -495,7 +495,7 @@ def serialize_m0_bundle(model: M0Model) -> bytes:
             "down_proj",
         ):
             proj: PackedTernaryTensor = getattr(layer, proj_name)
-            _add_chunk(f"{p}.{proj_name}", "stnw", serialize_packed_weights(proj))
+            _add_chunk(f"{p}.{proj_name}", "ttape", serialize_packed_weights(proj))
 
     header_json = json.dumps(
         {"config": meta, "tensors": tensor_index},
