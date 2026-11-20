@@ -51,7 +51,7 @@ CODE_RESERVED = 0b11
 
 
 class TtapeValidationError(ValueError):
-    """Typed Goose-style diagnostic raised when a .ttape buffer violates spec/ttape-v1-draft.md."""
+    """Typed Goose-style diagnostic raised when a .ttape buffer violates spec/ttape-v1.0.md."""
 
     def __init__(self, error_code: str, message: str, byte_offset: int = 0) -> None:
         self.error_code = error_code
@@ -229,7 +229,7 @@ def _audit_ttape(
     blob: bytes,
     reader_profile: str = "grouped",
 ) -> tuple[str, str, int, dict[int, bytes] | None]:
-    """Audit a .ttape buffer per §4 precedence order of spec/ttape-v1-draft.md."""
+    """Audit a .ttape buffer per §4 precedence order of spec/ttape-v1.0.md."""
     if reader_profile not in ("core", "grouped", "extended"):
         raise ValueError(
             "format.validate_ttape: expected reader_profile in "

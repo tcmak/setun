@@ -59,7 +59,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
   * **Normative `0b11` Contract vs. Hardware Defense-in-Depth (`ADR-003`):** Rejecting the reserved code `0b11` (and any non-zero tail padding) on load is the strict software/loader contract (`unpack_trits_1d` raises `ValueError`). The hardware `TernaryDot` lane aliases `0b11 -> 0` strictly as silicon defense-in-depth against uninitialized bus/FIFO beats, never as a valid weight encoding.
 
-  * **Canonical `TTAPE` v1 Container (`ADR-014`):** Setun consumes the canonical `.ttape` (`magic = "TTAP"`, `0x50415454` LE) specification and golden corpus from `third_party/TernaryTape` (`spec-v0.2-draft`), supporting both **`TTAPE-core`** (`DSP=0` power-of-two shift scales) and **`TTAPE-grouped`** (`0x0006` `group_scales_u16`) while rejecting `TTAPE-extended` (`0x0007` `fp32_aux`) fail-closed in hardware loader mode.
+  * **Canonical `TTAPE` v1 Container (`ADR-014`):** Setun consumes the canonical `.ttape` (`magic = "TTAP"`, `0x50415454` LE) specification and golden corpus from `third_party/TernaryTape` (`spec-v1.0`), supporting both **`TTAPE-core`** (`DSP=0` power-of-two shift scales) and **`TTAPE-grouped`** (`0x0006` `group_scales_u16`) while rejecting `TTAPE-extended` (`0x0007` `fp32_aux`) fail-closed in hardware loader mode.
 
 * **`M0` Golden Transformer Decoder (`setun/ref/m0.py` & `scripts/make_toy.py`):**
 

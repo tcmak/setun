@@ -245,6 +245,50 @@ def _linear_step(
     raise ValueError(f"Unsupported execution mode: {mode!r}")
 
 
+def forward_ternary_chain(
+    layers: list[PackedTernaryTensor],
+    x: np.ndarray,
+    *,
+    lanes: int = 16,
+    mode: str = "integer",
+    trace_hook: TraceHook | None = None,
+) -> np.ndarray:
+    """Execute sequential forward inference across PackedTernaryTensor layers from a .ttape file."""
+    if not layers:
+        raise ValueError("m0.forward_ternary_chain: expected non-empty layers list, got 0 layers.")
+    if mode not in ("integer", "fp32"):
+        raise ValueError(
+            f"m0.forward_ternary_chain: expected mode in ('integer', 'fp32'), got {mode!r}."
+        )
+
+    def _trace(name: str, tensor: np.ndarray) -> None:
+        if trace_hook is not None:
+            trace_hook(name, tensor.copy())
+
+    h = np.asarray(x)
+    for l_idx, layer in enumerate(layers):
+        if h.ndim != 1 or h.shape[0] != layer.n_cols:
+            raise ValueError(
+                f"m0.forward_ternary_chain [layer[{l_idx}]]: expected 1D input shape "
+                f"({layer.n_cols},), got {h.shape}."
+            )
+        if mode == "integer":
+            h_i64 = np.asarray(h, dtype=np.int64)
+            if np.any((h_i64 < -128) | (h_i64 > 127)):
+                h_min, h_max = int(np.min(h_i64)), int(np.max(h_i64))
+                raise ValueError(
+                    f"m0.forward_ternary_chain [layer[{l_idx}]]: activations must fit in "
+                    f"signed int8 [-128, 127], expected range [-128, 127], got [{h_min}, {h_max}]."
+                )
+            h = ternary_matvec_integer(layer, h_i64.astype(np.int8), lanes=lanes)
+        else:
+            w_fp32 = dequantize_packed_tensor_fp32(layer, weight_unit_scale=1.0)
+            h = (w_fp32 @ h.astype(np.float32)).astype(np.float32)
+        _trace(f"layers.{l_idx}", h)
+
+    return h
+
+
 def forward_token(
     model: M0Model,
     token_id: int,

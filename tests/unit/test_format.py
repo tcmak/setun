@@ -52,10 +52,14 @@ def test_ttape_grouped_worked_example_matches_golden_fixture() -> None:
 
 
 def test_canonical_ttape_accept_and_reject_corpus() -> None:
-    """Validates all 20 accept/*.ttape and reject/*.ttape fixtures from third_party/TernaryTape."""
+    """Validates all 21 accept/*.ttape and reject/*.ttape fixtures from third_party/TernaryTape."""
+    spec_path = REPO_ROOT / "third_party" / "TernaryTape" / "spec" / "ttape-v1.0.md"
+    assert spec_path.exists(), f"Expected frozen canonical spec at {spec_path}"
+    assert "FROZEN v1.0" in spec_path.read_text(encoding="utf-8")
+
     accept_files = sorted((FIXTURES_DIR / "accept").glob("*.ttape"))
     reject_files = sorted((FIXTURES_DIR / "reject").glob("*.ttape"))
-    assert len(accept_files) == 4
+    assert len(accept_files) == 5
     assert len(reject_files) == 16
 
     for bin_path in [*accept_files, *reject_files]:
@@ -98,6 +102,7 @@ def test_canonical_ttape_accept_and_reject_corpus() -> None:
         "core_minimal_dot4.ttape",
         "core_with_manifest_and_links.ttape",
         "grouped_with_u16_scales.ttape",
+        "lux_chain_grouped_mlp.ttape",
     ):
         orig = (FIXTURES_DIR / "accept" / name).read_bytes()
         assert validate_ttape(orig, reader_profile="grouped") == "TTAPE_OK"

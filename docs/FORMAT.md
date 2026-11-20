@@ -1,6 +1,6 @@
 # Setun Loader & In-Memory Weight Representation
 
-> **Single Wire-Format Source of Truth:** Setun does **not** define its own binary container format. All serialized `.ttape` files produced or consumed by `setun` conform strictly to the canonical **`TTAPE` v1.0 (Draft) Specification** in [`../third_party/TernaryTape/spec/ttape-v1-draft.md`](../third_party/TernaryTape/spec/ttape-v1-draft.md) (vendored from `TernaryTape.jl` at `spec-v0.2-draft`), verified against the shared golden corpus in [`../third_party/TernaryTape/fixtures/`](../third_party/TernaryTape/fixtures/).
+> **Single Wire-Format Source of Truth:** Setun does **not** define its own binary container format. All serialized `.ttape` files produced or consumed by `setun` conform strictly to the canonical **`TTAPE` v1.0 (FROZEN v1.0) Specification** in [`../third_party/TernaryTape/spec/ttape-v1.0.md`](../third_party/TernaryTape/spec/ttape-v1.0.md) (vendored from `TernaryTape.jl` at `spec-v1.0`), verified against the shared golden corpus in [`../third_party/TernaryTape/fixtures/`](../third_party/TernaryTape/fixtures/).
 
 This document specifies **only** Setun-specific loader constraints and how `setun/ref/format.py` maps validated `.ttape` sections into `PackedTernaryTensor` in-memory hardware buffers (`ADR-003`, `ADR-004`, `ADR-011`, `ADR-014`).
 
