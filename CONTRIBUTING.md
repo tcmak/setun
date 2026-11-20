@@ -18,13 +18,14 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -e ".[dev]"
 
-# Install pinned LiteX ecosystem packages (matches toolchain.lock)
+# Install migen==0.10.0 (via pyproject.toml) and pinned LiteX ecosystem commits from toolchain.lock:
 pip install \
-    "git+https://github.com/m-labs/migen.git@d62d73602fa5ff6f7fb0f3f7d0f1b6bf0fa4885a" \
-    "git+https://github.com/enjoy-digital/litex.git@e3ebce1f33eb42cb0a7fd098a3eb4b0cf8eb48b4" \
-    "git+https://github.com/enjoy-digital/litedram.git@53a7f5d241b720b18eb015ca0d56c4cf0bc2ab9d" \
-    "git+https://github.com/enjoy-digital/liteeth.git@80fa158268295248330b7cd86a622a5a05593938"
+    "git+https://github.com/enjoy-digital/litex.git@9187839f2d275352ef6f0d7ab14431e2a66b8f81" \
+    "git+https://github.com/enjoy-digital/litedram.git@f2d22975d67229676e10308ae6e71b819b6afe42" \
+    "git+https://github.com/enjoy-digital/liteeth.git@9712c3899c4b9d162aca5aef403889ab2c8c4542"
 ```
+
+See [`toolchain.lock`](toolchain.lock) and [`pyproject.toml`](pyproject.toml) (`migen==0.10.0`) as the single source of truth for all pinned versions and commits.
 
 3. **Verify environment:**
 

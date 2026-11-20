@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+PINNED_MIGEN_VERSION = "0.10.0"
+
 
 def parse_lockfile(path: Path) -> dict[str, str]:
     locks: dict[str, str] = {}
@@ -52,9 +54,14 @@ def probe_yosys() -> str:
 
 def probe_pkg_version(pkg: str) -> str:
     try:
-        return importlib.metadata.version(pkg)
+        ver = importlib.metadata.version(pkg)
     except importlib.metadata.PackageNotFoundError:
         return "MISSING"
+
+    git_state = probe_git_pkg(pkg)
+    if git_state not in ("INSTALLED_NON_GIT", "MISSING"):
+        return f"git@{git_state} (unpinned git install of {pkg}=={ver})"
+    return ver
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -70,6 +77,8 @@ def probe_git_pkg(pkg: str) -> str:
                 m = re.search(r'"commit_id"\s*:\s*"([0-9a-f]{40})"', direct_url)
                 if m:
                     return m.group(1)
+                if '"vcs"' in direct_url or "git" in direct_url:
+                    return "UNPINNED_GIT_VCS"
 
     # 2. Check editable git checkout only if its top-level is not REPO_ROOT
     spec = importlib.util.find_spec(pkg)
@@ -121,11 +130,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.lockfile.exists():
-        print(f"ERROR: Lockfile {args.lockfile} not found.", file=sys.stderr)
+        print(
+            f"ERROR [scripts/doctor.py:main]: Lockfile invariant violated at offset 0: "
+            f"expected existing file at '{args.lockfile}', found MISSING.",
+            file=sys.stderr,
+        )
         return 1
 
     expected = parse_lockfile(args.lockfile)
-    actual = probe_all(list(expected.keys()))
+    probe_keys = list(expected.keys())
+    if "migen" not in probe_keys:
+        probe_keys.append("migen")
+    actual = probe_all(probe_keys)
 
     if args.write:
         write_lockfile(args.lockfile, actual)
@@ -139,16 +155,42 @@ def main(argv: list[str] | None = None) -> int:
         print("================================")
 
     mismatches: list[str] = []
+    if expected.get("migen") != PINNED_MIGEN_VERSION:
+        mismatches.append(
+            f"  - [scripts/doctor.py:check_migen_pin] invariant 'migen == {PINNED_MIGEN_VERSION}' "
+            f"violated in {args.lockfile} (line/key 'migen'): "
+            f"expected '{PINNED_MIGEN_VERSION}', found '{expected.get('migen', 'MISSING')}'"
+        )
+
+    act_migen = actual.get("migen", "MISSING")
+    if act_migen != PINNED_MIGEN_VERSION:
+        mismatches.append(
+            f"  - [scripts/doctor.py:check_migen_version] invariant "
+            f"'migen == {PINNED_MIGEN_VERSION}' violated in active Python environment: "
+            f"expected '{PINNED_MIGEN_VERSION}', found '{act_migen}'"
+        )
+
     for k, exp_val in expected.items():
+        if k == "migen":
+            continue
         act_val = actual.get(k, "MISSING")
         if k.startswith("git:") and act_val != "MISSING":
             if not act_val.startswith(exp_val) and not exp_val.startswith(act_val):
-                mismatches.append(f"  - {k}: expected '{exp_val}', found '{act_val}'")
+                mismatches.append(
+                    f"  - [scripts/doctor.py:main] key '{k}' invariant violated: "
+                    f"expected '{exp_val}', found '{act_val}'"
+                )
         elif act_val != exp_val:
-            mismatches.append(f"  - {k}: expected '{exp_val}', found '{act_val}'")
+            mismatches.append(
+                f"  - [scripts/doctor.py:main] key '{k}' invariant violated: "
+                f"expected '{exp_val}', found '{act_val}'"
+            )
 
     if mismatches:
-        print("ERROR: Toolchain check failed against toolchain.lock:", file=sys.stderr)
+        print(
+            f"ERROR [scripts/doctor.py:main]: Toolchain check failed against {args.lockfile}:",
+            file=sys.stderr,
+        )
         for msg in mismatches:
             print(msg, file=sys.stderr)
         print(
