@@ -18,9 +18,9 @@
 
   * [`docs/phases.md`](docs/phases.md) — Full task catalogue and acceptance criteria checkboxes.
 
-  * [`docs/decisions.md`](docs/decisions.md) — Architecture Decision Records (`ADR-001` through `ADR-012`).
+  * [`docs/decisions.md`](docs/decisions.md) — Architecture Decision Records (`ADR-001` through `ADR-014`).
 
-  * [`docs/open-questions.md`](docs/open-questions.md) — Active cross-repo blockers (`OQ-001`).
+  * [`docs/open-questions.md`](docs/open-questions.md) — Cross-repo blocker log (`OQ-001` resolved in Task B2).
 
 ## Why Ternary LLMs on LiteX FPGAs?
 
@@ -59,7 +59,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
   * **Normative `0b11` Contract vs. Hardware Defense-in-Depth (`ADR-003`):** Rejecting the reserved code `0b11` (and any non-zero tail padding) on load is the strict software/loader contract (`unpack_trits_1d` raises `ValueError`). The hardware `TernaryDot` lane aliases `0b11 -> 0` strictly as silicon defense-in-depth against uninitialized bus/FIFO beats, never as a valid weight encoding.
 
-  * **Portfolio Alignment with `VeriObjC` `VTPE v1` (`OQ-001`):** Setun currently uses its interim `STNW` (tensor) and `STM0` (model bundle) headers. A planned migration to the cross-repo **`VTPE v1`** format (supporting both `VTPE-Core` `DSP=0` power-of-two shift tapes and `VTPE-Grouped` `u16` group-scale tapes) is documented in [`docs/FORMAT.md` §6](docs/FORMAT.md) and is currently **blocked on `VeriObjC` Task 5.6** (`rt/` layout and `0x0006` shared `shift` field reconciliation). Until that loader rewrite and conformance test land, `STNW`/`STM0` and `VTPE` coexist and are not claimed unified.
+  * **Canonical `TTAPE` v1 Container (`ADR-014`):** Setun consumes the canonical `.ttape` (`magic = "TTAP"`, `0x50415454` LE) specification and golden corpus from `third_party/TernaryTape` (`spec-v0.1-draft`), supporting both **`TTAPE-core`** (`DSP=0` power-of-two shift scales) and **`TTAPE-grouped`** (`0x0006` `group_scales_u16`) while rejecting `TTAPE-extended` (`0x0007` `fp32_aux`) fail-closed in hardware loader mode.
 
 * **`M0` Golden Transformer Decoder (`setun/ref/m0.py` & `scripts/make_toy.py`):**
 
