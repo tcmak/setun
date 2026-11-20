@@ -62,6 +62,6 @@ Decision: Align Setun's synthesis, real-model evaluation, and board bring-up gat
 ADR-014: Canonical TTAPE v1 Container Adoption (TTAPE-core & TTAPE-grouped)
 Status: Accepted (2026-11-20, Task B2)
 Decision:
-1. Single Spec & Fixture Source of Truth: Setun vendors TernaryTape.jl (pinned at spec-v0.1-draft) at third_party/TernaryTape and removes duplicated wire-format tables from docs/FORMAT.md.
+1. Single Spec & Fixture Source of Truth: Setun vendors TernaryTape.jl (via HTTPS submodule at third_party/TernaryTape, pinned at spec-v0.2-draft) and removes duplicated wire-format tables from docs/FORMAT.md.
 2. Supported Profiles: Setun's default loader gate (reader_profile="grouped") supports both TTAPE-core (flags bit 2 = 0, per-layer s16 power-of-two shift scales in 0x0002 executed in 0-DSP shift mode) and TTAPE-grouped (flags bit 2 = 1, section 0x0006 group_scales_u16 carrying explicit group_size G in {64, 128, 256}, shared uint8 shift in [0, 30], and row-major uint16 scale mantissas).
 3. Fail-Closed Extended Gate: Tapes carrying host-only section 0x0007 (fp32_aux) or host layer kinds {6, 7} (TTAPE-extended) are rejected fail-closed with TTAPE_ERR_UNSUPPORTED_PROFILE under Setun's hardware-targeted "grouped" profile, and accepted only when host callers explicitly request reader_profile="extended".
