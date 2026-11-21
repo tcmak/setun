@@ -1,4 +1,4 @@
-"""LiteX AutoCSR wrapper integrating WeightUnpacker + TernaryDot + GroupAccumulateScale."""
+"""LiteX AutoCSR wrapper integrating WeightUnpacker + multi-row TernaryTile + Requantize."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from pathlib import Path
 
 from litex.soc.integration import export
 from litex.soc.interconnect.csr import AutoCSR, CSRField, CSRStatus, CSRStorage
-from migen import Array, Case, Cat, If, Module, Signal
+from migen import Array, Cat, If, Memory, Module, Mux, Signal
 
-from setun.accelerators.group_scale import GroupAccumulateScale
-from setun.accelerators.ternary_dot import TernaryDot
+from setun.accelerators.requantize import Requantize
+from setun.accelerators.tile import TernaryTile
 from setun.accelerators.unpacker import WeightUnpacker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,29 +25,32 @@ _DETERMINISTIC_BANNER = (
 
 
 class TernaryAccel(Module, AutoCSR):
-    """Single-row unpacked ternary GEMV LiteX peripheral (Task C1.1c / Task 3.1 foundation).
+    """Multi-row streaming ternary GEMV LiteX peripheral (Tasks 3.1a & 3.1b, docs/CSR.md).
 
-    Wires Maintainer-Owned RTL modules end-to-end without modifying `setun/accelerators/`:
-      `WeightUnpacker` (`valid`/`ready`) -> `TernaryDot` -> `GroupAccumulateScale` (`valid`-only)
+    Composes maintainer-owned RTL cores without modifying `setun/accelerators/`:
+      `WeightUnpacker` -> `(R - 1)` sync-BRAM stripe banks -> `TernaryTile(rows=R)` -> `Requantize`
     """
 
     def __init__(
         self,
+        rows: int = 4,
         lanes: int = 64,
         group_size: int = 128,
         beat_bits: int = 256,
         act_bits: int = 8,
         acc_bits: int = 48,
-        max_k: int = 512,
-        max_rows: int = 64,
+        max_k: int = 2048,
+        max_rows: int = 2048,
     ) -> None:
+        if rows < 1:
+            raise ValueError(f"soc.TernaryAccel: rows must be >= 1, got {rows}.")
         if act_bits != 8:
             raise ValueError(
                 f"soc.TernaryAccel: expected act_bits == 8 for CSR word staging, got {act_bits}."
             )
-        if lanes < 4 or lanes % 4 != 0:
+        if lanes < 4 or lanes % 4 != 0 or (lanes & (lanes - 1)) != 0:
             raise ValueError(
-                f"soc.TernaryAccel: expected lanes to be a multiple of 4, got {lanes}."
+                f"soc.TernaryAccel: expected lanes to be a power-of-2 multiple of 4, got {lanes}."
             )
         if max_k < group_size or max_k % group_size != 0:
             raise ValueError(
@@ -57,6 +60,7 @@ class TernaryAccel(Module, AutoCSR):
         if max_rows < 1:
             raise ValueError(f"soc.TernaryAccel: max_rows must be >= 1, got {max_rows}.")
 
+        self.rows = rows
         self.lanes = lanes
         self.group_size = group_size
         self.beat_bits = beat_bits
@@ -68,20 +72,23 @@ class TernaryAccel(Module, AutoCSR):
         self.words_per_slice = lanes // 4
         self.total_act_words = self.max_beats * self.words_per_slice
 
-        # Instantiate maintainer-owned RTL pipeline cores
+        # Instantiate maintainer-owned RTL cores and unify onto SoCCore's sys clock domain
         unpacker = WeightUnpacker(beat_bits=beat_bits, lanes=lanes, group_size=group_size)
-        # Drop WeightUnpacker's standalone cd_sys declaration so SoCCore's single sys domain drives
-        # all synchronous logic cleanly without clock-domain duplication.
-        unpacker._fragment.clock_domains.clear()
-        self.submodules.unpacker = unpacker
-        self.submodules.dot = TernaryDot(lanes=lanes, act_bits=act_bits, pipeline_depth=0)
-        self.submodules.acc = GroupAccumulateScale(
-            group_size=group_size,
+        tile = TernaryTile(
+            rows=rows,
             lanes=lanes,
+            group_size=group_size,
             act_bits=act_bits,
             acc_bits=acc_bits,
-            shift=0,
+            max_k=max_k,
         )
+        requantize = Requantize(in_bits=acc_bits, out_bits=8)
+        for sub in (unpacker, tile, requantize):
+            if hasattr(sub, "_fragment"):
+                sub._fragment.clock_domains.clear()
+        self.submodules.unpacker = unpacker
+        self.submodules.tile = tile
+        self.submodules.requantize = requantize
 
         # Expose upstream packed weight & group-scale stream ports (`valid`/`ready`)
         self.trit_data = self.unpacker.trit_data
@@ -92,26 +99,19 @@ class TernaryAccel(Module, AutoCSR):
         self.scale_valid = self.unpacker.scale_valid
         self.scale_ready = self.unpacker.scale_ready
 
-        # CSR Register Map
+        # -------------------------------------------------------------------
+        # CSR Register Map (#0..#9 locked at Task 3.1a offsets +0x00..+0x24)
+        # -------------------------------------------------------------------
         self.ctrl = CSRStorage(
             32,
             name="ctrl",
-            description="Accelerator stream enable and state reset control",
+            description="Accelerator stream enable, reset, launch, and requantize control",
             fields=[
-                CSRField(
-                    "enable",
-                    size=1,
-                    offset=0,
-                    reset=1,
-                    description="Assert out_ready=1 into WeightUnpacker to accept beats",
-                ),
-                CSRField(
-                    "clear",
-                    size=1,
-                    offset=1,
-                    pulse=True,
-                    description="Clear row counter, beat pointer, and output status",
-                ),
+                CSRField("enable", size=1, offset=0, reset=1, description="Enable stream ready"),
+                CSRField("clear", size=1, offset=1, pulse=True, description="Clear state/flags"),
+                CSRField("start", size=1, offset=2, pulse=True, description="Validate & start"),
+                CSRField("req_enable", size=1, offset=3, reset=0, description="Enable Requantize"),
+                CSRField("req_sym", size=1, offset=4, reset=0, description="Symmetric int8 clamp"),
             ],
         )
         self.cfg = CSRStorage(
@@ -119,20 +119,8 @@ class TernaryAccel(Module, AutoCSR):
             name="cfg",
             description="Per-layer shift exponent and target output row count",
             fields=[
-                CSRField(
-                    "shift",
-                    size=6,
-                    offset=0,
-                    reset=0,
-                    description="Round-half-up right-shift exponent in [0, 30]",
-                ),
-                CSRField(
-                    "num_rows",
-                    size=16,
-                    offset=8,
-                    reset=1,
-                    description="Expected output rows N for status.done assertion",
-                ),
+                CSRField("shift", size=6, offset=0, reset=0, description="Tile shift in [0, 30]"),
+                CSRField("num_rows", size=16, offset=8, reset=1, description="Target rows N"),
             ],
         )
         info_reset = (lanes & 0xFF) | ((group_size & 0xFFF) << 8) | ((beat_bits & 0xFFF) << 20)
@@ -150,149 +138,619 @@ class TernaryAccel(Module, AutoCSR):
         self.status = CSRStatus(
             32,
             name="status",
-            description="Pipeline readiness and completed row status",
+            description="Pipeline readiness, sticky error/saturation flags, and row progress",
             fields=[
-                CSRField("busy", size=1, offset=0, description="1 while rows_completed < num_rows"),
+                CSRField("busy", size=1, offset=0, description="1 while GEMV active and error==0"),
                 CSRField("done", size=1, offset=1, description="1 when rows_completed >= num_rows"),
                 CSRField("trit_ready", size=1, offset=2, description="Live unpacker.trit_ready"),
                 CSRField("scale_ready", size=1, offset=3, description="Live unpacker.scale_ready"),
-                CSRField(
-                    "rows_completed",
-                    size=16,
-                    offset=16,
-                    description="Completed row outputs since last ctrl.clear",
-                ),
+                CSRField("error", size=1, offset=4, description="Sticky illegal-parameter flag"),
+                CSRField("req_saturated", size=1, offset=5, description="Sticky Requantize clip"),
+                CSRField("err_code", size=4, offset=8, description="Sticky 4-bit error bitmask"),
+                CSRField("rows_completed", size=16, offset=16, description="Completed row count"),
             ],
         )
         self.act_word_idx = CSRStorage(
             16,
             name="act_word_idx",
-            description="32-bit word write pointer into quantized int8 activation buffer",
+            description="32-bit word write pointer into quantized int8 activation BRAM",
         )
         self.act_word_data = CSRStorage(
             32,
             name="act_word_data",
-            description="Write 4 packed int8 activations (LE) and auto-increment pointer",
+            description="Write 4 packed int8 activations (LE) to BRAM and auto-increment pointer",
         )
         self.result_lo = CSRStatus(
             32,
             name="result_lo",
-            description="Lower 32 bits of most recent shifted row output",
+            description="Lower 32 bits of most recent row output",
         )
         self.result_hi = CSRStatus(
             32,
             name="result_hi",
-            description="Sign-extended upper bits [47:32] of most recent shifted row output",
+            description="Sign-extended upper bits [47:32] of most recent row output",
         )
         self.out_row_idx = CSRStorage(
             16,
             name="out_row_idx",
-            description="Row index selector for out_row_data readback",
+            description="Row index selector driving synchronous read port of output BRAM",
         )
         self.out_row_data = CSRStatus(
             32,
             name="out_row_data",
-            description="Signed int32 result for row selected by out_row_idx",
+            description="Signed int32 result from output BRAM for row out_row_idx",
         )
 
-        # Activation word register file -> L-lane beat slices
-        act_words = Array([Signal(32, name=f"act_word_{i}") for i in range(self.total_act_words)])
-        act_slices = Array(
-            [
-                Cat(*[act_words[b * self.words_per_slice + w] for w in range(self.words_per_slice)])
-                for b in range(self.max_beats)
-            ]
+        # -------------------------------------------------------------------
+        # Task 3.1b Phase-3 CSRs (#10..#21 appended strictly after +0x24)
+        # -------------------------------------------------------------------
+        tile_info_rst = (rows & 0xFF) | ((lanes & 0xFF) << 8) | ((group_size & 0xFFFF) << 16)
+        self.tile_info = CSRStatus(
+            32,
+            reset=tile_info_rst,
+            name="tile_info",
+            description="Multi-row tile geometry (rows, lanes, hw_group_size)",
+            fields=[
+                CSRField("rows", size=8, offset=0, reset=rows),
+                CSRField("lanes", size=8, offset=8, reset=lanes),
+                CSRField("hw_group_size", size=16, offset=16, reset=group_size),
+            ],
         )
-        act_wr_ptr = Signal(max=max(self.total_act_words, 2), name="act_wr_ptr")
-        act_beat_idx = Signal(max=max(self.max_beats, 2), name="act_beat_idx")
+        buf_caps_rst = (max_k & 0xFFFF) | ((max_rows & 0xFFFF) << 16)
+        self.buf_caps = CSRStatus(
+            32,
+            reset=buf_caps_rst,
+            name="buf_caps",
+            description="Synthesized scratchpad capacities (max_k, max_rows up to 65535)",
+            fields=[
+                CSRField("max_k", size=16, offset=0, reset=max_k),
+                CSRField("max_rows", size=16, offset=16, reset=max_rows),
+            ],
+        )
+        dim_k_rst = (group_size & 0xFFFF) | ((group_size & 0xFFFF) << 16)
+        self.dim_k = CSRStorage(
+            32,
+            reset=dim_k_rst,
+            name="dim_k",
+            description="Layer K dimension and expected group_size validated on ctrl.start",
+            fields=[
+                CSRField("k_cols", size=16, offset=0, reset=group_size),
+                CSRField("group_size", size=16, offset=16, reset=group_size),
+            ],
+        )
+        self.weight_addr = CSRStorage(32, name="weight_addr", description="4B-aligned weight ptr")
+        self.scale_addr = CSRStorage(32, name="scale_addr", description="4B-aligned scale ptr")
+        self.act_addr = CSRStorage(32, name="act_addr", description="4B-aligned activation ptr")
+        self.out_addr = CSRStorage(32, name="out_addr", description="4B-aligned output ptr")
+        self.act_scale = CSRStorage(32, name="act_scale", description="Host FP32 act_scale bits")
+        self.req_cfg = CSRStorage(
+            32,
+            reset=1,
+            name="req_cfg",
+            description="Requantize unsigned scale_u16 and right-shift exponent",
+            fields=[
+                CSRField("scale_u16", size=16, offset=0, reset=1),
+                CSRField("shift", size=6, offset=16, reset=0),
+            ],
+        )
+        self.perf_cycles = CSRStatus(32, name="perf_cycles", description="Busy cycles in run")
+        self.perf_bus_beats = CSRStatus(32, name="perf_bus_beats", description="Accepted beats")
+        self.perf_sat_rows = CSRStatus(32, name="perf_sat_rows", description="Clipped int8 rows")
 
-        # Row output register file
-        row_results = Array([Signal(32, name=f"row_res_{r}") for r in range(self.max_rows)])
-        rows_done = Signal(16, name="rows_done")
-        last_res = Signal((acc_bits, True), name="last_res")
-
-        # Stream pipeline wiring: WeightUnpacker -> TernaryDot -> GroupAccumulateScale
-        enable_sig = self.ctrl.fields.enable
-        clear_sig = self.ctrl.fields.clear
-        shift_sig = self.cfg.fields.shift
-        num_rows_sig = self.cfg.fields.num_rows
-        pipe_fire = Signal(name="pipe_fire")
-
+        # Drive constant read-only geometry CSRs
         self.comb += [
             self.info.fields.lanes.eq(lanes),
             self.info.fields.group_size.eq(group_size),
             self.info.fields.beat_bits.eq(beat_bits),
-            self.unpacker.out_ready.eq(enable_sig),
-            pipe_fire.eq(self.unpacker.out_valid & self.unpacker.out_ready),
-            self.dot.trits_packed.eq(self.unpacker.trits_packed),
-            self.dot.acts_packed.eq(act_slices[act_beat_idx]),
-            self.dot.in_valid.eq(pipe_fire),
-            self.acc.dot_in.eq(self.dot.result),
-            self.acc.scale_u16.eq(self.unpacker.scale_u16),
-            self.acc.in_valid.eq(self.dot.out_valid),
-            self.acc.row_last.eq(self.unpacker.row_last),
+            self.tile_info.fields.rows.eq(rows),
+            self.tile_info.fields.lanes.eq(lanes),
+            self.tile_info.fields.hw_group_size.eq(group_size),
+            self.buf_caps.fields.max_k.eq(max_k),
+            self.buf_caps.fields.max_rows.eq(max_rows),
         ]
 
-        # Programmable round-half-up shift matching setun/ref/ops.py::round_shift_right
-        shifted_acc = Signal((acc_bits, True), name="shifted_acc")
-        shift_cases: dict[int | str, object] = {0: shifted_acc.eq(self.acc.result)}
-        for s in range(1, 31):
-            bias = 1 << (s - 1)
-            shift_cases[s] = shifted_acc.eq((self.acc.result + bias) >> s)
-        shift_cases["default"] = shifted_acc.eq((self.acc.result + (1 << 29)) >> 30)
-        self.comb += Case(shift_sig, shift_cases)
+        # -------------------------------------------------------------------
+        # Synchronous BRAM Scratchpads (async_read=False -> RAMB18E1 / DP16KD)
+        # -------------------------------------------------------------------
+        act_mem_depth = max(self.total_act_words, 2)
+        act_scratch_mem = Memory(width=32, depth=act_mem_depth)
+        act_wr_port = act_scratch_mem.get_port(write_capable=True)
+        act_rd_port = act_scratch_mem.get_port(async_read=False)
+        self.specials += act_scratch_mem, act_wr_port, act_rd_port
 
-        # Sign-extend bits [47:32] for result_hi CSR
+        out_mem_depth = max(self.max_rows, 2)
+        out_scratch_mem = Memory(width=32, depth=out_mem_depth)
+        out_wr_port = out_scratch_mem.get_port(write_capable=True)
+        out_rd_port = out_scratch_mem.get_port(async_read=False)
+        self.specials += out_scratch_mem, out_wr_port, out_rd_port
+
+        self.comb += [
+            out_rd_port.adr.eq(self.out_row_idx.storage),
+            self.out_row_data.status.eq(out_rd_port.dat_r),
+        ]
+
+        # (R - 1) synchronous BRAM banks for row-major -> R-row lockstep stripe staging
+        # Pad depth to >= 128 when rows > 1 so Yosys infers DP16KD/RAMB18E1 rather than FFs
+        stripe_mem_depth = max(self.max_beats, 128) if rows > 1 else 2
+        stripe_entry_bits = 2 * lanes + 16
+        sw_ports = []
+        sr_ports = []
+        for _b in range(rows - 1):
+            smem = Memory(width=stripe_entry_bits, depth=stripe_mem_depth)
+            sw_p = smem.get_port(write_capable=True)
+            sr_p = smem.get_port(async_read=False, has_re=True)
+            self.specials += smem, sw_p, sr_p
+            sw_ports.append(sw_p)
+            sr_ports.append(sr_p)
+
+        # -------------------------------------------------------------------
+        # Control, Parameter Validation, and Activation Sync-BRAM Loader FSM
+        # -------------------------------------------------------------------
+        enable_sig = self.ctrl.fields.enable
+        clear_sig = self.ctrl.fields.clear
+        start_sig = self.ctrl.fields.start
+        req_en_sig = self.ctrl.fields.req_enable
+        req_sym_sig = self.ctrl.fields.req_sym
+        shift_sig = self.cfg.fields.shift
+        num_rows_sig = self.cfg.fields.num_rows
+        k_cols_sig = self.dim_k.fields.k_cols
+        g_cfg_sig = self.dim_k.fields.group_size
+
+        err_k = Signal(name="err_k")
+        err_n = Signal(name="err_n")
+        err_g = Signal(name="err_g")
+        err_align = Signal(name="err_align")
+        start_err_mask = Signal(4, name="start_err_mask")
+
+        self.comb += [
+            err_k.eq((k_cols_sig == 0) | (k_cols_sig > max_k)),
+            err_n.eq((num_rows_sig == 0) | (num_rows_sig > max_rows)),
+            err_g.eq(g_cfg_sig != group_size),
+            err_align.eq(
+                (self.weight_addr.storage[0:2] != 0)
+                | (self.scale_addr.storage[0:2] != 0)
+                | (self.act_addr.storage[0:2] != 0)
+                | (self.out_addr.storage[0:2] != 0)
+            ),
+            start_err_mask.eq(Cat(err_k, err_n, err_g, err_align)),
+        ]
+
+        err_sticky = Signal(name="err_sticky")
+        err_code_reg = Signal(4, name="err_code_reg")
+        req_sat_sticky = Signal(name="req_sat_sticky")
+        rows_done = Signal(16, name="rows_done")
+        last_res = Signal((acc_bits, True), name="last_res")
+        perf_cycles_cnt = Signal(32, name="perf_cycles_cnt")
+        perf_beats_cnt = Signal(32, name="perf_beats_cnt")
+        perf_sat_cnt = Signal(32, name="perf_sat_cnt")
+
+        # Power-of-two shift helpers for zero-divider group/slice word counts
+        g_shift = group_size.bit_length() - 1
+        words_per_group = group_size // 4
+        wpg_shift = words_per_group.bit_length() - 1
+        wps_shift = self.words_per_slice.bit_length() - 1
+
+        k_plus_pad = Signal(17, name="k_plus_pad")
+        target_load_words = Signal(17, name="target_load_words")
+        self.comb += [
+            k_plus_pad.eq(k_cols_sig + (group_size - 1)),
+            target_load_words.eq((k_plus_pad >> g_shift) << wpg_shift),
+        ]
+
+        act_wr_ptr = Signal(max=act_mem_depth, name="act_wr_ptr")
+        stage_words = Array([Signal(32, name=f"stage_w_{w}") for w in range(self.words_per_slice)])
+        loading_acts = Signal(name="loading_acts")
+        load_word_limit = Signal(17, name="load_word_limit")
+        ld_req_idx = Signal(17, name="ld_req_idx")
+        ld_issue_en = Signal(name="ld_issue_en")
+        ld_resp_valid = Signal(name="ld_resp_valid")
+        ld_resp_idx = Signal(17, name="ld_resp_idx")
+
+        csr_sub_idx = Signal(max=max(self.words_per_slice, 2), name="csr_sub_idx")
+        csr_slice_idx = Signal(max=max(self.max_beats, 2), name="csr_slice_idx")
+        ld_sub_idx = Signal(max=max(self.words_per_slice, 2), name="ld_sub_idx")
+        ld_slice_idx = Signal(max=max(self.max_beats, 2), name="ld_slice_idx")
+
+        if wps_shift == 0:
+            self.comb += [
+                csr_sub_idx.eq(0),
+                csr_slice_idx.eq(act_wr_ptr),
+                ld_sub_idx.eq(0),
+                ld_slice_idx.eq(ld_resp_idx),
+            ]
+        else:
+            self.comb += [
+                csr_sub_idx.eq(act_wr_ptr[0:wps_shift]),
+                csr_slice_idx.eq(act_wr_ptr[wps_shift:]),
+                ld_sub_idx.eq(ld_resp_idx[0:wps_shift]),
+                ld_slice_idx.eq(ld_resp_idx[wps_shift:]),
+            ]
+
+        csr_live_slice = Cat(
+            *[
+                Mux(csr_sub_idx == w, self.act_word_data.storage, stage_words[w])
+                for w in range(self.words_per_slice)
+            ]
+        )
+        ld_live_slice = Cat(
+            *[
+                Mux(ld_sub_idx == w, act_rd_port.dat_r, stage_words[w])
+                for w in range(self.words_per_slice)
+            ]
+        )
+
+        self.comb += [
+            act_wr_port.adr.eq(act_wr_ptr),
+            act_wr_port.dat_w.eq(self.act_word_data.storage),
+            act_wr_port.we.eq(self.act_word_data.re),
+            ld_issue_en.eq(loading_acts & (ld_req_idx < load_word_limit)),
+            act_rd_port.adr.eq(ld_req_idx),
+            If(
+                ld_resp_valid,
+                self.tile.act_wr_addr.eq(ld_slice_idx),
+                self.tile.act_wr_data.eq(ld_live_slice),
+                self.tile.act_wr_en.eq(ld_sub_idx == (self.words_per_slice - 1)),
+            ).Else(
+                self.tile.act_wr_addr.eq(csr_slice_idx),
+                self.tile.act_wr_data.eq(csr_live_slice),
+                self.tile.act_wr_en.eq(
+                    self.act_word_data.re & (csr_sub_idx == (self.words_per_slice - 1))
+                ),
+            ),
+        ]
+
+        # -------------------------------------------------------------------
+        # Row-Major Stream -> R-Row Lockstep TernaryTile Feeder
+        # -------------------------------------------------------------------
+        stripe_base_row = Signal(16, name="stripe_base_row")
+        stripe_row_off = Signal(max=max(rows, 2), name="stripe_row_off")
+        wr_slice_idx = Signal(max=stripe_mem_depth, name="wr_slice_idx")
+        rd_slice_idx = Signal(max=stripe_mem_depth, name="rd_slice_idx")
+
+        rem_in_rows = Signal(17, name="rem_in_rows")
+        stripe_target_rows = Signal(max=rows + 1, name="stripe_target_rows")
+        in_rows_active = Signal(name="in_rows_active")
+        can_accept_u = Signal(name="can_accept_u")
+        u_fire = Signal(name="u_fire")
+
+        self.comb += [
+            If(
+                num_rows_sig > stripe_base_row,
+                rem_in_rows.eq(num_rows_sig - stripe_base_row),
+            ).Else(
+                rem_in_rows.eq(0),
+            ),
+            If(
+                rem_in_rows >= rows,
+                stripe_target_rows.eq(rows),
+            ).Else(
+                stripe_target_rows.eq(rem_in_rows),
+            ),
+            in_rows_active.eq(stripe_target_rows != 0),
+            can_accept_u.eq(enable_sig & (~err_sticky) & (~loading_acts) & in_rows_active),
+            u_fire.eq(self.unpacker.out_valid & self.unpacker.out_ready),
+            self.tile.clear.eq(clear_sig | start_sig),
+            self.tile.shift.eq(shift_sig),
+            self.tile.num_rows.eq(Mux(err_sticky, 0, num_rows_sig)),
+        ]
+
+        align_valid = Signal(name="align_valid")
+        align_trits = Signal(2 * lanes, name="align_trits")
+        align_scale = Signal(16, name="align_scale")
+        align_last = Signal(name="align_last")
+        align_s_rows = Signal(max=rows + 1, name="align_s_rows")
+        is_flush_row = Signal(name="is_flush_row")
+        align_ready = Signal(name="align_ready")
+
+        if rows == 1:
+            self.comb += [
+                self.unpacker.out_ready.eq(can_accept_u & self.tile.sink.ready),
+                self.tile.sink.valid.eq(self.unpacker.out_valid & can_accept_u),
+                self.tile.sink.trits.eq(self.unpacker.trits_packed),
+                self.tile.sink.scales.eq(self.unpacker.scale_u16),
+                self.tile.sink.last.eq(self.unpacker.row_last),
+            ]
+        else:
+            self.comb += [
+                is_flush_row.eq(stripe_row_off == (stripe_target_rows - 1)),
+                align_ready.eq((~align_valid) | self.tile.sink.ready),
+                If(
+                    ~can_accept_u,
+                    self.unpacker.out_ready.eq(0),
+                )
+                .Elif(
+                    is_flush_row,
+                    self.unpacker.out_ready.eq(align_ready),
+                )
+                .Else(
+                    self.unpacker.out_ready.eq(1),
+                ),
+            ]
+
+            packed_entry = Cat(self.unpacker.trits_packed, self.unpacker.scale_u16)
+            for b in range(rows - 1):
+                self.comb += [
+                    sw_ports[b].adr.eq(wr_slice_idx),
+                    sw_ports[b].dat_w.eq(packed_entry),
+                    sw_ports[b].we.eq(u_fire & (~is_flush_row) & (stripe_row_off == b)),
+                    sr_ports[b].adr.eq(rd_slice_idx),
+                    sr_ports[b].re.eq(u_fire & is_flush_row),
+                ]
+
+            row_trit_sigs: list[Signal] = []
+            row_scale_sigs: list[Signal] = []
+            t_bits = 2 * lanes
+            for r in range(rows):
+                rt = Signal(t_bits, name=f"mux_rt_{r}")
+                rs = Signal(16, name=f"mux_rs_{r}")
+                if r < rows - 1:
+                    bank_t = sr_ports[r].dat_r[0:t_bits]
+                    bank_s = sr_ports[r].dat_r[t_bits:stripe_entry_bits]
+                    self.comb += [
+                        If(
+                            align_s_rows == (r + 1),
+                            rt.eq(align_trits),
+                            rs.eq(align_scale),
+                        )
+                        .Elif(
+                            align_s_rows > (r + 1),
+                            rt.eq(bank_t),
+                            rs.eq(bank_s),
+                        )
+                        .Else(
+                            rt.eq(0),
+                            rs.eq(0),
+                        )
+                    ]
+                else:
+                    self.comb += [
+                        If(
+                            align_s_rows == rows,
+                            rt.eq(align_trits),
+                            rs.eq(align_scale),
+                        ).Else(
+                            rt.eq(0),
+                            rs.eq(0),
+                        )
+                    ]
+                row_trit_sigs.append(rt)
+                row_scale_sigs.append(rs)
+
+            self.comb += [
+                self.tile.sink.valid.eq(align_valid),
+                self.tile.sink.last.eq(align_last),
+                self.tile.sink.trits.eq(Cat(*row_trit_sigs)),
+                self.tile.sink.scales.eq(Cat(*row_scale_sigs)),
+            ]
+
+        # -------------------------------------------------------------------
+        # Output Routing: Raw Shifted int48/int32 vs. Requantize int8 Stage
+        # -------------------------------------------------------------------
+        req_i8_signed = Signal((8, True), name="req_i8_signed")
+        req_ext_48 = Signal((acc_bits, True), name="req_ext_48")
+        tile_raw_48 = Signal((acc_bits, True), name="tile_raw_48")
+
+        out_commit_valid = Signal(name="out_commit_valid")
+        out_commit_row = Signal(16, name="out_commit_row")
+        out_commit_val48 = Signal((acc_bits, True), name="out_commit_val48")
+        out_commit_sat = Signal(name="out_commit_sat")
+
+        self.comb += [
+            self.requantize.clear.eq(clear_sig | start_sig),
+            self.requantize.scale_u16.eq(self.req_cfg.fields.scale_u16),
+            self.requantize.shift.eq(self.req_cfg.fields.shift),
+            self.requantize.symmetric.eq(req_sym_sig),
+            self.requantize.sink.result.eq(self.tile.source.result),
+            self.requantize.sink.row_idx.eq(self.tile.source.row_idx),
+            self.requantize.sink.last.eq(self.tile.source.last),
+            self.requantize.source.ready.eq(1),
+            req_i8_signed.eq(self.requantize.source.result),
+            req_ext_48.eq(req_i8_signed),
+            tile_raw_48.eq(self.tile.source.result),
+            If(
+                req_en_sig,
+                self.requantize.sink.valid.eq(self.tile.source.valid),
+                self.tile.source.ready.eq(self.requantize.sink.ready),
+                out_commit_valid.eq(self.requantize.source.valid),
+                out_commit_row.eq(self.requantize.source.row_idx),
+                out_commit_val48.eq(req_ext_48),
+                out_commit_sat.eq(self.requantize.source.saturated),
+            ).Else(
+                self.requantize.sink.valid.eq(0),
+                self.tile.source.ready.eq(1),
+                out_commit_valid.eq(self.tile.source.valid),
+                out_commit_row.eq(self.tile.source.row_idx),
+                out_commit_val48.eq(tile_raw_48),
+                out_commit_sat.eq(0),
+            ),
+            out_wr_port.adr.eq(out_commit_row),
+            out_wr_port.dat_w.eq(out_commit_val48[0:32]),
+            out_wr_port.we.eq(out_commit_valid & (out_commit_row < self.max_rows)),
+        ]
+
+        # Status & Performance CSR wiring
+        busy_wire = Signal(name="busy_wire")
+        done_wire = Signal(name="done_wire")
         upper_signed = Signal((16, True), name="upper_signed")
         upper_i32 = Signal((32, True), name="upper_i32")
+
         self.comb += [
+            done_wire.eq((~err_sticky) & (num_rows_sig != 0) & (rows_done >= num_rows_sig)),
+            busy_wire.eq(
+                (~err_sticky) & (loading_acts | ((num_rows_sig != 0) & (rows_done < num_rows_sig)))
+            ),
             upper_signed.eq(last_res[32:48]),
             upper_i32.eq(upper_signed),
             self.result_lo.status.eq(last_res[0:32]),
             self.result_hi.status.eq(upper_i32),
-            self.out_row_data.status.eq(row_results[self.out_row_idx.storage]),
-            self.status.fields.done.eq((num_rows_sig != 0) & (rows_done >= num_rows_sig)),
-            self.status.fields.busy.eq((num_rows_sig != 0) & (rows_done < num_rows_sig)),
+            self.status.fields.busy.eq(busy_wire),
+            self.status.fields.done.eq(done_wire),
             self.status.fields.trit_ready.eq(self.unpacker.trit_ready),
             self.status.fields.scale_ready.eq(self.unpacker.scale_ready),
+            self.status.fields.error.eq(err_sticky),
+            self.status.fields.req_saturated.eq(req_sat_sticky),
+            self.status.fields.err_code.eq(err_code_reg),
             self.status.fields.rows_completed.eq(rows_done),
+            self.perf_cycles.status.eq(perf_cycles_cnt),
+            self.perf_bus_beats.status.eq(perf_beats_cnt),
+            self.perf_sat_rows.status.eq(perf_sat_cnt),
         ]
 
-        # Sequential control, activation staging, beat stepping, and row output capture
+        # -------------------------------------------------------------------
+        # Sequential State Updates
+        # -------------------------------------------------------------------
+        stage_csr_stmts = [
+            If(csr_sub_idx == w, stage_words[w].eq(self.act_word_data.storage))
+            for w in range(self.words_per_slice)
+        ]
+        stage_ld_stmts = [
+            If(ld_sub_idx == w, stage_words[w].eq(act_rd_port.dat_r))
+            for w in range(self.words_per_slice)
+        ]
+
+        stripe_sync_stmts = []
+        if rows == 1:
+            stripe_sync_stmts.append(
+                If(
+                    u_fire & self.unpacker.row_last,
+                    stripe_base_row.eq(stripe_base_row + 1),
+                )
+            )
+        else:
+            stripe_sync_stmts.extend(
+                [
+                    If(
+                        u_fire & (~is_flush_row),
+                        If(
+                            self.unpacker.row_last | (wr_slice_idx == (stripe_mem_depth - 1)),
+                            wr_slice_idx.eq(0),
+                            stripe_row_off.eq(stripe_row_off + 1),
+                        ).Else(
+                            wr_slice_idx.eq(wr_slice_idx + 1),
+                        ),
+                    ),
+                    If(
+                        align_ready,
+                        If(
+                            u_fire & is_flush_row,
+                            align_valid.eq(1),
+                            align_trits.eq(self.unpacker.trits_packed),
+                            align_scale.eq(self.unpacker.scale_u16),
+                            align_last.eq(self.unpacker.row_last),
+                            align_s_rows.eq(stripe_target_rows),
+                            If(
+                                self.unpacker.row_last | (rd_slice_idx == (stripe_mem_depth - 1)),
+                                rd_slice_idx.eq(0),
+                                stripe_row_off.eq(0),
+                                stripe_base_row.eq(stripe_base_row + rows),
+                            ).Else(
+                                rd_slice_idx.eq(rd_slice_idx + 1),
+                            ),
+                        ).Else(
+                            align_valid.eq(0),
+                        ),
+                    ),
+                ]
+            )
+
         self.sync += [
+            # Activation write pointer & stage word updates
             If(
                 self.act_word_idx.re,
                 act_wr_ptr.eq(self.act_word_idx.storage),
-            ).Elif(
+            )
+            .Elif(
                 self.act_word_data.re,
-                act_words[act_wr_ptr].eq(self.act_word_data.storage),
+                *stage_csr_stmts,
                 If(
                     act_wr_ptr == (self.total_act_words - 1),
                     act_wr_ptr.eq(0),
                 ).Else(
                     act_wr_ptr.eq(act_wr_ptr + 1),
                 ),
+            )
+            .Elif(
+                ld_resp_valid,
+                *stage_ld_stmts,
             ),
+            # Atomic reset / start validation / normal execution
             If(
                 clear_sig,
-                act_beat_idx.eq(0),
+                err_sticky.eq(0),
+                err_code_reg.eq(0),
+                req_sat_sticky.eq(0),
                 rows_done.eq(0),
                 last_res.eq(0),
-            ).Else(
+                perf_cycles_cnt.eq(0),
+                perf_beats_cnt.eq(0),
+                perf_sat_cnt.eq(0),
+                loading_acts.eq(0),
+                ld_req_idx.eq(0),
+                ld_resp_valid.eq(0),
+                stripe_base_row.eq(0),
+                stripe_row_off.eq(0),
+                wr_slice_idx.eq(0),
+                rd_slice_idx.eq(0),
+                align_valid.eq(0),
+            )
+            .Elif(
+                start_sig,
+                # Refinement #5: atomically clear prior sticky status/errors before checking cfg
+                req_sat_sticky.eq(0),
+                rows_done.eq(0),
+                last_res.eq(0),
+                perf_cycles_cnt.eq(0),
+                perf_beats_cnt.eq(0),
+                perf_sat_cnt.eq(0),
+                stripe_base_row.eq(0),
+                stripe_row_off.eq(0),
+                wr_slice_idx.eq(0),
+                rd_slice_idx.eq(0),
+                align_valid.eq(0),
+                ld_req_idx.eq(0),
+                ld_resp_valid.eq(0),
                 If(
-                    pipe_fire,
-                    If(
-                        self.unpacker.row_last | (act_beat_idx == (self.max_beats - 1)),
-                        act_beat_idx.eq(0),
-                    ).Else(
-                        act_beat_idx.eq(act_beat_idx + 1),
-                    ),
+                    start_err_mask != 0,
+                    err_sticky.eq(1),
+                    err_code_reg.eq(start_err_mask),
+                    loading_acts.eq(0),
+                ).Else(
+                    err_sticky.eq(0),
+                    err_code_reg.eq(0),
+                    loading_acts.eq(1),
+                    load_word_limit.eq(target_load_words),
+                ),
+            )
+            .Else(
+                # 1-cycle synchronous BRAM activation loader FSM
+                ld_resp_valid.eq(ld_issue_en),
+                ld_resp_idx.eq(ld_req_idx),
+                If(
+                    ld_issue_en,
+                    ld_req_idx.eq(ld_req_idx + 1),
                 ),
                 If(
-                    self.acc.out_valid,
-                    last_res.eq(shifted_acc),
-                    If(rows_done < self.max_rows, row_results[rows_done].eq(shifted_acc[0:32])),
+                    loading_acts & ld_resp_valid & ((ld_resp_idx + 1) >= load_word_limit),
+                    loading_acts.eq(0),
+                ),
+                # Telemetry counters
+                If(busy_wire, perf_cycles_cnt.eq(perf_cycles_cnt + 1)),
+                If(
+                    self.trit_valid & self.trit_ready,
+                    perf_beats_cnt.eq(perf_beats_cnt + 1),
+                ),
+                # Stripe feeder state
+                *stripe_sync_stmts,
+                # Output commit from TernaryTile / Requantize
+                If(
+                    out_commit_valid,
+                    last_res.eq(out_commit_val48),
                     rows_done.eq(rows_done + 1),
+                    If(
+                        out_commit_sat,
+                        req_sat_sticky.eq(1),
+                        perf_sat_cnt.eq(perf_sat_cnt + 1),
+                    ),
                 ),
             ),
         ]

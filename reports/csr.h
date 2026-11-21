@@ -78,12 +78,42 @@
 #define CSR_TERNARY_ACCEL_OUT_ROW_IDX_SIZE 1
 #define CSR_TERNARY_ACCEL_OUT_ROW_DATA_ADDR (CSR_BASE + 0x1824L)
 #define CSR_TERNARY_ACCEL_OUT_ROW_DATA_SIZE 1
+#define CSR_TERNARY_ACCEL_TILE_INFO_ADDR (CSR_BASE + 0x1828L)
+#define CSR_TERNARY_ACCEL_TILE_INFO_SIZE 1
+#define CSR_TERNARY_ACCEL_BUF_CAPS_ADDR (CSR_BASE + 0x182cL)
+#define CSR_TERNARY_ACCEL_BUF_CAPS_SIZE 1
+#define CSR_TERNARY_ACCEL_DIM_K_ADDR (CSR_BASE + 0x1830L)
+#define CSR_TERNARY_ACCEL_DIM_K_SIZE 1
+#define CSR_TERNARY_ACCEL_WEIGHT_ADDR_ADDR (CSR_BASE + 0x1834L)
+#define CSR_TERNARY_ACCEL_WEIGHT_ADDR_SIZE 1
+#define CSR_TERNARY_ACCEL_SCALE_ADDR_ADDR (CSR_BASE + 0x1838L)
+#define CSR_TERNARY_ACCEL_SCALE_ADDR_SIZE 1
+#define CSR_TERNARY_ACCEL_ACT_ADDR_ADDR (CSR_BASE + 0x183cL)
+#define CSR_TERNARY_ACCEL_ACT_ADDR_SIZE 1
+#define CSR_TERNARY_ACCEL_OUT_ADDR_ADDR (CSR_BASE + 0x1840L)
+#define CSR_TERNARY_ACCEL_OUT_ADDR_SIZE 1
+#define CSR_TERNARY_ACCEL_ACT_SCALE_ADDR (CSR_BASE + 0x1844L)
+#define CSR_TERNARY_ACCEL_ACT_SCALE_SIZE 1
+#define CSR_TERNARY_ACCEL_REQ_CFG_ADDR (CSR_BASE + 0x1848L)
+#define CSR_TERNARY_ACCEL_REQ_CFG_SIZE 1
+#define CSR_TERNARY_ACCEL_PERF_CYCLES_ADDR (CSR_BASE + 0x184cL)
+#define CSR_TERNARY_ACCEL_PERF_CYCLES_SIZE 1
+#define CSR_TERNARY_ACCEL_PERF_BUS_BEATS_ADDR (CSR_BASE + 0x1850L)
+#define CSR_TERNARY_ACCEL_PERF_BUS_BEATS_SIZE 1
+#define CSR_TERNARY_ACCEL_PERF_SAT_ROWS_ADDR (CSR_BASE + 0x1854L)
+#define CSR_TERNARY_ACCEL_PERF_SAT_ROWS_SIZE 1
 
 /* TERNARY_ACCEL Fields */
 #define CSR_TERNARY_ACCEL_CTRL_ENABLE_OFFSET 0
 #define CSR_TERNARY_ACCEL_CTRL_ENABLE_SIZE 1
 #define CSR_TERNARY_ACCEL_CTRL_CLEAR_OFFSET 1
 #define CSR_TERNARY_ACCEL_CTRL_CLEAR_SIZE 1
+#define CSR_TERNARY_ACCEL_CTRL_START_OFFSET 2
+#define CSR_TERNARY_ACCEL_CTRL_START_SIZE 1
+#define CSR_TERNARY_ACCEL_CTRL_REQ_ENABLE_OFFSET 3
+#define CSR_TERNARY_ACCEL_CTRL_REQ_ENABLE_SIZE 1
+#define CSR_TERNARY_ACCEL_CTRL_REQ_SYM_OFFSET 4
+#define CSR_TERNARY_ACCEL_CTRL_REQ_SYM_SIZE 1
 #define CSR_TERNARY_ACCEL_CFG_SHIFT_OFFSET 0
 #define CSR_TERNARY_ACCEL_CFG_SHIFT_SIZE 6
 #define CSR_TERNARY_ACCEL_CFG_NUM_ROWS_OFFSET 8
@@ -102,8 +132,32 @@
 #define CSR_TERNARY_ACCEL_STATUS_TRIT_READY_SIZE 1
 #define CSR_TERNARY_ACCEL_STATUS_SCALE_READY_OFFSET 3
 #define CSR_TERNARY_ACCEL_STATUS_SCALE_READY_SIZE 1
+#define CSR_TERNARY_ACCEL_STATUS_ERROR_OFFSET 4
+#define CSR_TERNARY_ACCEL_STATUS_ERROR_SIZE 1
+#define CSR_TERNARY_ACCEL_STATUS_REQ_SATURATED_OFFSET 5
+#define CSR_TERNARY_ACCEL_STATUS_REQ_SATURATED_SIZE 1
+#define CSR_TERNARY_ACCEL_STATUS_ERR_CODE_OFFSET 8
+#define CSR_TERNARY_ACCEL_STATUS_ERR_CODE_SIZE 4
 #define CSR_TERNARY_ACCEL_STATUS_ROWS_COMPLETED_OFFSET 16
 #define CSR_TERNARY_ACCEL_STATUS_ROWS_COMPLETED_SIZE 16
+#define CSR_TERNARY_ACCEL_TILE_INFO_ROWS_OFFSET 0
+#define CSR_TERNARY_ACCEL_TILE_INFO_ROWS_SIZE 8
+#define CSR_TERNARY_ACCEL_TILE_INFO_LANES_OFFSET 8
+#define CSR_TERNARY_ACCEL_TILE_INFO_LANES_SIZE 8
+#define CSR_TERNARY_ACCEL_TILE_INFO_HW_GROUP_SIZE_OFFSET 16
+#define CSR_TERNARY_ACCEL_TILE_INFO_HW_GROUP_SIZE_SIZE 16
+#define CSR_TERNARY_ACCEL_BUF_CAPS_MAX_K_OFFSET 0
+#define CSR_TERNARY_ACCEL_BUF_CAPS_MAX_K_SIZE 16
+#define CSR_TERNARY_ACCEL_BUF_CAPS_MAX_ROWS_OFFSET 16
+#define CSR_TERNARY_ACCEL_BUF_CAPS_MAX_ROWS_SIZE 16
+#define CSR_TERNARY_ACCEL_DIM_K_K_COLS_OFFSET 0
+#define CSR_TERNARY_ACCEL_DIM_K_K_COLS_SIZE 16
+#define CSR_TERNARY_ACCEL_DIM_K_GROUP_SIZE_OFFSET 16
+#define CSR_TERNARY_ACCEL_DIM_K_GROUP_SIZE_SIZE 16
+#define CSR_TERNARY_ACCEL_REQ_CFG_SCALE_U16_OFFSET 0
+#define CSR_TERNARY_ACCEL_REQ_CFG_SCALE_U16_SIZE 16
+#define CSR_TERNARY_ACCEL_REQ_CFG_SHIFT_OFFSET 16
+#define CSR_TERNARY_ACCEL_REQ_CFG_SHIFT_SIZE 6
 
 /* TIMER0 Registers */
 #define CSR_TIMER0_BASE (CSR_BASE + 0x2000L)
@@ -256,6 +310,63 @@ static inline void ternary_accel_out_row_idx_write(uint32_t v) {
 }
 static inline uint32_t ternary_accel_out_row_data_read(void) {
 	return csr_read_simple((CSR_BASE + 0x1824L));
+}
+static inline uint32_t ternary_accel_tile_info_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1828L));
+}
+static inline uint32_t ternary_accel_buf_caps_read(void) {
+	return csr_read_simple((CSR_BASE + 0x182cL));
+}
+static inline uint32_t ternary_accel_dim_k_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1830L));
+}
+static inline void ternary_accel_dim_k_write(uint32_t v) {
+	csr_write_simple(v, (CSR_BASE + 0x1830L));
+}
+static inline uint32_t ternary_accel_weight_addr_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1834L));
+}
+static inline void ternary_accel_weight_addr_write(uint32_t v) {
+	csr_write_simple(v, (CSR_BASE + 0x1834L));
+}
+static inline uint32_t ternary_accel_scale_addr_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1838L));
+}
+static inline void ternary_accel_scale_addr_write(uint32_t v) {
+	csr_write_simple(v, (CSR_BASE + 0x1838L));
+}
+static inline uint32_t ternary_accel_act_addr_read(void) {
+	return csr_read_simple((CSR_BASE + 0x183cL));
+}
+static inline void ternary_accel_act_addr_write(uint32_t v) {
+	csr_write_simple(v, (CSR_BASE + 0x183cL));
+}
+static inline uint32_t ternary_accel_out_addr_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1840L));
+}
+static inline void ternary_accel_out_addr_write(uint32_t v) {
+	csr_write_simple(v, (CSR_BASE + 0x1840L));
+}
+static inline uint32_t ternary_accel_act_scale_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1844L));
+}
+static inline void ternary_accel_act_scale_write(uint32_t v) {
+	csr_write_simple(v, (CSR_BASE + 0x1844L));
+}
+static inline uint32_t ternary_accel_req_cfg_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1848L));
+}
+static inline void ternary_accel_req_cfg_write(uint32_t v) {
+	csr_write_simple(v, (CSR_BASE + 0x1848L));
+}
+static inline uint32_t ternary_accel_perf_cycles_read(void) {
+	return csr_read_simple((CSR_BASE + 0x184cL));
+}
+static inline uint32_t ternary_accel_perf_bus_beats_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1850L));
+}
+static inline uint32_t ternary_accel_perf_sat_rows_read(void) {
+	return csr_read_simple((CSR_BASE + 0x1854L));
 }
 
 /* TIMER0 Access Functions */
@@ -423,6 +534,57 @@ static inline void ternary_accel_ctrl_clear_write(uint32_t plain_value) {
 	uint32_t newword = ternary_accel_ctrl_clear_replace(oldword, plain_value);
 	ternary_accel_ctrl_write(newword);
 }
+static inline uint32_t ternary_accel_ctrl_start_extract(uint32_t oldword) {
+	uint32_t mask = 0x1;
+	return ((oldword >> 2) & mask);
+}
+static inline uint32_t ternary_accel_ctrl_start_read(void) {
+	uint32_t word = ternary_accel_ctrl_read();
+	return ternary_accel_ctrl_start_extract(word);
+}
+static inline uint32_t ternary_accel_ctrl_start_replace(uint32_t oldword, uint32_t plain_value) {
+	uint32_t mask = 0x1;
+	return (oldword & (~(mask << 2))) | ((mask & plain_value) << 2);
+}
+static inline void ternary_accel_ctrl_start_write(uint32_t plain_value) {
+	uint32_t oldword = ternary_accel_ctrl_read();
+	uint32_t newword = ternary_accel_ctrl_start_replace(oldword, plain_value);
+	ternary_accel_ctrl_write(newword);
+}
+static inline uint32_t ternary_accel_ctrl_req_enable_extract(uint32_t oldword) {
+	uint32_t mask = 0x1;
+	return ((oldword >> 3) & mask);
+}
+static inline uint32_t ternary_accel_ctrl_req_enable_read(void) {
+	uint32_t word = ternary_accel_ctrl_read();
+	return ternary_accel_ctrl_req_enable_extract(word);
+}
+static inline uint32_t ternary_accel_ctrl_req_enable_replace(uint32_t oldword, uint32_t plain_value) {
+	uint32_t mask = 0x1;
+	return (oldword & (~(mask << 3))) | ((mask & plain_value) << 3);
+}
+static inline void ternary_accel_ctrl_req_enable_write(uint32_t plain_value) {
+	uint32_t oldword = ternary_accel_ctrl_read();
+	uint32_t newword = ternary_accel_ctrl_req_enable_replace(oldword, plain_value);
+	ternary_accel_ctrl_write(newword);
+}
+static inline uint32_t ternary_accel_ctrl_req_sym_extract(uint32_t oldword) {
+	uint32_t mask = 0x1;
+	return ((oldword >> 4) & mask);
+}
+static inline uint32_t ternary_accel_ctrl_req_sym_read(void) {
+	uint32_t word = ternary_accel_ctrl_read();
+	return ternary_accel_ctrl_req_sym_extract(word);
+}
+static inline uint32_t ternary_accel_ctrl_req_sym_replace(uint32_t oldword, uint32_t plain_value) {
+	uint32_t mask = 0x1;
+	return (oldword & (~(mask << 4))) | ((mask & plain_value) << 4);
+}
+static inline void ternary_accel_ctrl_req_sym_write(uint32_t plain_value) {
+	uint32_t oldword = ternary_accel_ctrl_read();
+	uint32_t newword = ternary_accel_ctrl_req_sym_replace(oldword, plain_value);
+	ternary_accel_ctrl_write(newword);
+}
 static inline uint32_t ternary_accel_cfg_shift_extract(uint32_t oldword) {
 	uint32_t mask = 0x3f;
 	return ((oldword >> 0) & mask);
@@ -513,6 +675,30 @@ static inline uint32_t ternary_accel_status_scale_ready_read(void) {
 	uint32_t word = ternary_accel_status_read();
 	return ternary_accel_status_scale_ready_extract(word);
 }
+static inline uint32_t ternary_accel_status_error_extract(uint32_t oldword) {
+	uint32_t mask = 0x1;
+	return ((oldword >> 4) & mask);
+}
+static inline uint32_t ternary_accel_status_error_read(void) {
+	uint32_t word = ternary_accel_status_read();
+	return ternary_accel_status_error_extract(word);
+}
+static inline uint32_t ternary_accel_status_req_saturated_extract(uint32_t oldword) {
+	uint32_t mask = 0x1;
+	return ((oldword >> 5) & mask);
+}
+static inline uint32_t ternary_accel_status_req_saturated_read(void) {
+	uint32_t word = ternary_accel_status_read();
+	return ternary_accel_status_req_saturated_extract(word);
+}
+static inline uint32_t ternary_accel_status_err_code_extract(uint32_t oldword) {
+	uint32_t mask = 0xf;
+	return ((oldword >> 8) & mask);
+}
+static inline uint32_t ternary_accel_status_err_code_read(void) {
+	uint32_t word = ternary_accel_status_read();
+	return ternary_accel_status_err_code_extract(word);
+}
 static inline uint32_t ternary_accel_status_rows_completed_extract(uint32_t oldword) {
 	uint32_t mask = 0xffff;
 	return ((oldword >> 16) & mask);
@@ -520,6 +706,114 @@ static inline uint32_t ternary_accel_status_rows_completed_extract(uint32_t oldw
 static inline uint32_t ternary_accel_status_rows_completed_read(void) {
 	uint32_t word = ternary_accel_status_read();
 	return ternary_accel_status_rows_completed_extract(word);
+}
+static inline uint32_t ternary_accel_tile_info_rows_extract(uint32_t oldword) {
+	uint32_t mask = 0xff;
+	return ((oldword >> 0) & mask);
+}
+static inline uint32_t ternary_accel_tile_info_rows_read(void) {
+	uint32_t word = ternary_accel_tile_info_read();
+	return ternary_accel_tile_info_rows_extract(word);
+}
+static inline uint32_t ternary_accel_tile_info_lanes_extract(uint32_t oldword) {
+	uint32_t mask = 0xff;
+	return ((oldword >> 8) & mask);
+}
+static inline uint32_t ternary_accel_tile_info_lanes_read(void) {
+	uint32_t word = ternary_accel_tile_info_read();
+	return ternary_accel_tile_info_lanes_extract(word);
+}
+static inline uint32_t ternary_accel_tile_info_hw_group_size_extract(uint32_t oldword) {
+	uint32_t mask = 0xffff;
+	return ((oldword >> 16) & mask);
+}
+static inline uint32_t ternary_accel_tile_info_hw_group_size_read(void) {
+	uint32_t word = ternary_accel_tile_info_read();
+	return ternary_accel_tile_info_hw_group_size_extract(word);
+}
+static inline uint32_t ternary_accel_buf_caps_max_k_extract(uint32_t oldword) {
+	uint32_t mask = 0xffff;
+	return ((oldword >> 0) & mask);
+}
+static inline uint32_t ternary_accel_buf_caps_max_k_read(void) {
+	uint32_t word = ternary_accel_buf_caps_read();
+	return ternary_accel_buf_caps_max_k_extract(word);
+}
+static inline uint32_t ternary_accel_buf_caps_max_rows_extract(uint32_t oldword) {
+	uint32_t mask = 0xffff;
+	return ((oldword >> 16) & mask);
+}
+static inline uint32_t ternary_accel_buf_caps_max_rows_read(void) {
+	uint32_t word = ternary_accel_buf_caps_read();
+	return ternary_accel_buf_caps_max_rows_extract(word);
+}
+static inline uint32_t ternary_accel_dim_k_k_cols_extract(uint32_t oldword) {
+	uint32_t mask = 0xffff;
+	return ((oldword >> 0) & mask);
+}
+static inline uint32_t ternary_accel_dim_k_k_cols_read(void) {
+	uint32_t word = ternary_accel_dim_k_read();
+	return ternary_accel_dim_k_k_cols_extract(word);
+}
+static inline uint32_t ternary_accel_dim_k_k_cols_replace(uint32_t oldword, uint32_t plain_value) {
+	uint32_t mask = 0xffff;
+	return (oldword & (~(mask << 0))) | ((mask & plain_value) << 0);
+}
+static inline void ternary_accel_dim_k_k_cols_write(uint32_t plain_value) {
+	uint32_t oldword = ternary_accel_dim_k_read();
+	uint32_t newword = ternary_accel_dim_k_k_cols_replace(oldword, plain_value);
+	ternary_accel_dim_k_write(newword);
+}
+static inline uint32_t ternary_accel_dim_k_group_size_extract(uint32_t oldword) {
+	uint32_t mask = 0xffff;
+	return ((oldword >> 16) & mask);
+}
+static inline uint32_t ternary_accel_dim_k_group_size_read(void) {
+	uint32_t word = ternary_accel_dim_k_read();
+	return ternary_accel_dim_k_group_size_extract(word);
+}
+static inline uint32_t ternary_accel_dim_k_group_size_replace(uint32_t oldword, uint32_t plain_value) {
+	uint32_t mask = 0xffff;
+	return (oldword & (~(mask << 16))) | ((mask & plain_value) << 16);
+}
+static inline void ternary_accel_dim_k_group_size_write(uint32_t plain_value) {
+	uint32_t oldword = ternary_accel_dim_k_read();
+	uint32_t newword = ternary_accel_dim_k_group_size_replace(oldword, plain_value);
+	ternary_accel_dim_k_write(newword);
+}
+static inline uint32_t ternary_accel_req_cfg_scale_u16_extract(uint32_t oldword) {
+	uint32_t mask = 0xffff;
+	return ((oldword >> 0) & mask);
+}
+static inline uint32_t ternary_accel_req_cfg_scale_u16_read(void) {
+	uint32_t word = ternary_accel_req_cfg_read();
+	return ternary_accel_req_cfg_scale_u16_extract(word);
+}
+static inline uint32_t ternary_accel_req_cfg_scale_u16_replace(uint32_t oldword, uint32_t plain_value) {
+	uint32_t mask = 0xffff;
+	return (oldword & (~(mask << 0))) | ((mask & plain_value) << 0);
+}
+static inline void ternary_accel_req_cfg_scale_u16_write(uint32_t plain_value) {
+	uint32_t oldword = ternary_accel_req_cfg_read();
+	uint32_t newword = ternary_accel_req_cfg_scale_u16_replace(oldword, plain_value);
+	ternary_accel_req_cfg_write(newword);
+}
+static inline uint32_t ternary_accel_req_cfg_shift_extract(uint32_t oldword) {
+	uint32_t mask = 0x3f;
+	return ((oldword >> 16) & mask);
+}
+static inline uint32_t ternary_accel_req_cfg_shift_read(void) {
+	uint32_t word = ternary_accel_req_cfg_read();
+	return ternary_accel_req_cfg_shift_extract(word);
+}
+static inline uint32_t ternary_accel_req_cfg_shift_replace(uint32_t oldword, uint32_t plain_value) {
+	uint32_t mask = 0x3f;
+	return (oldword & (~(mask << 16))) | ((mask & plain_value) << 16);
+}
+static inline void ternary_accel_req_cfg_shift_write(uint32_t plain_value) {
+	uint32_t oldword = ternary_accel_req_cfg_read();
+	uint32_t newword = ternary_accel_req_cfg_shift_replace(oldword, plain_value);
+	ternary_accel_req_cfg_write(newword);
 }
 
 /* TIMER0 Fields Access Functions */

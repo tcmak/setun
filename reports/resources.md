@@ -51,3 +51,11 @@ Shared 1-row/cycle 2-stage pipelined requantizer (`II = 1`, 1 instance per `Tern
 | Width (`in -> out`) | XC7 LUT6 | XC7 FFs | XC7 DSP48E1 | ECP5 LUT4 | ECP5 FFs | ECP5 MULT18 | Measured ECP5 Fmax |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | `48b -> 8b` | 2640 | 117 | 0 | 6017 | 117 | 0 | 49.08 MHz |
+
+## 5. Multi-Row SoC & Sync BRAM Inference (`TernaryAccel`, Task 3.1b)
+
+Full `TernaryAccel(R=4, L=64, G=128, max_k=2048, max_rows=2048)` (`WeightUnpacker` + `(R-1)` sync-BRAM stripe banks + `TernaryTile` + `Requantize` + activation/output scratchpad BRAMs):
+
+| Geometry | XC7 LUT6 | XC7 FFs | XC7 BRAM (`RAMB18/36`) | XC7 DSP | ECP5 LUT4 | ECP5 FFs | ECP5 BRAM (`DP16KD`) | ECP5 MULT18 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `R=4, L=64, K=2048` | 20381 | 1948 | 9 | 0 | 36708 | 1948 | 17 | 0 |

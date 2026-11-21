@@ -248,9 +248,9 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 3.1 `TernaryAccel` wrapper with CSRs [M] · *S2*
 - **Do:** CSRs for control/status, N, K, G, input/output/weight/scale pointers, activation scale, error flags. Completion by polling (IRQ optional).
 - **Accept:**
-  - [ ] `csr.json` is generated
-  - [ ] one GEMV launched by register writes matches golden
-  - [ ] illegal parameters (K = 0, misaligned address, N too large) set error bits and never hang (tested)
+  - [X] `csr.json` is generated
+  - [X] one GEMV launched by register writes matches golden
+  - [X] illegal parameters (K = 0, misaligned address, N too large) set error bits and never hang (tested)
 
 ### 3.2 Weight streaming from SimSoC memory [L] · *S2*
 - **Do:** SDRAM/RAM model in the sim; burst reader (LiteDRAM DMA or Wishbone/AXI) feeding the tile; preload weights with the sim's memory init-file option (check `litex_sim --help`); document burst and alignment rules.

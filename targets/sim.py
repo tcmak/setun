@@ -1,4 +1,4 @@
-"""LiteX SimSoC target for Setun (Tasks 0.3, 0.4, & C1.1c)."""
+"""LiteX SimSoC target for Setun (Tasks 0.3, 0.4, 3.1a, & 3.1b)."""
 
 from __future__ import annotations
 
@@ -33,9 +33,12 @@ class SetunSimSoC(SoCCore):
         self,
         with_accel_stub: bool = False,
         with_ternary_accel: bool = True,
+        accel_rows: int = 4,
         accel_lanes: int = 64,
         accel_group_size: int = 128,
         accel_beat_bits: int = 256,
+        accel_max_k: int = 2048,
+        accel_max_rows: int = 2048,
         expose_host_wb: bool = False,
         use_external_crg: bool = True,
         **kwargs,
@@ -60,9 +63,12 @@ class SetunSimSoC(SoCCore):
 
         if with_ternary_accel:
             self.ternary_accel = TernaryAccel(
+                rows=accel_rows,
                 lanes=accel_lanes,
                 group_size=accel_group_size,
                 beat_bits=accel_beat_bits,
+                max_k=accel_max_k,
+                max_rows=accel_max_rows,
             )
 
         if expose_host_wb:

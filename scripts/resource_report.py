@@ -11,11 +11,13 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from migen import ClockDomain, Module
 from migen.fhdl import verilog
 
 from setun.accelerators.group_scale import TernaryRow
 from setun.accelerators.requantize import Requantize
 from setun.accelerators.tile import TernaryTile
+from setun.soc.ternary_accel import TernaryAccel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -113,6 +115,24 @@ class RequantizeStageMetrics:
     ecp5_ffs: int
     ecp5_dsps: int
     ecp5_fmax_mhz: float
+
+
+@dataclass
+class AccelBramMetrics:
+    rows: int
+    lanes: int
+    group_size: int
+    max_k: int
+    max_rows: int
+    nodsp: bool
+    xc7_lut6: int
+    xc7_ffs: int
+    xc7_brams: int
+    xc7_dsps: int
+    ecp5_lut4: int
+    ecp5_ffs: int
+    ecp5_dp16kd: int
+    ecp5_dsps: int
 
 
 def _resolve_nextpnr_ecp5() -> str:
@@ -573,11 +593,171 @@ def run_requantize_characterization(
     )
 
 
+def run_accel_bram_characterization(
+    rows: int = 4,
+    lanes: int = 64,
+    group_size: int = 128,
+    beat_bits: int = 256,
+    max_k: int = 2048,
+    max_rows: int = 2048,
+    nodsp: bool = True,
+) -> AccelBramMetrics:
+    """Synthesize TernaryAccel on XC7 + ECP5 and verify synchronous BRAM inference (Task 3.1b)."""
+    if shutil.which("yosys") is None:
+        raise RuntimeError(
+            "[scripts/resource_report.py:run_accel_bram_characterization] yosys not in PATH."
+        )
+
+    class _AccelSynthTop(Module):
+        def __init__(self) -> None:
+            self.clock_domains.cd_sys = ClockDomain("sys")
+            acc = TernaryAccel(
+                rows=rows,
+                lanes=lanes,
+                group_size=group_size,
+                beat_bits=beat_bits,
+                max_k=max_k,
+                max_rows=max_rows,
+            )
+            self.submodules.acc = acc
+            self.ios = {
+                self.cd_sys.clk,
+                self.cd_sys.rst,
+                acc.trit_data,
+                acc.trit_last,
+                acc.trit_valid,
+                acc.trit_ready,
+                acc.scale_data,
+                acc.scale_valid,
+                acc.scale_ready,
+                acc.ctrl.storage,
+                acc.ctrl.re,
+                acc.ctrl.fields.enable,
+                acc.ctrl.fields.clear,
+                acc.ctrl.fields.start,
+                acc.ctrl.fields.req_enable,
+                acc.ctrl.fields.req_sym,
+                acc.cfg.fields.shift,
+                acc.cfg.fields.num_rows,
+                acc.dim_k.fields.k_cols,
+                acc.dim_k.fields.group_size,
+                acc.req_cfg.fields.scale_u16,
+                acc.req_cfg.fields.shift,
+                acc.weight_addr.storage,
+                acc.scale_addr.storage,
+                acc.act_addr.storage,
+                acc.out_addr.storage,
+                acc.act_word_idx.storage,
+                acc.act_word_idx.re,
+                acc.act_word_data.storage,
+                acc.act_word_data.re,
+                acc.out_row_idx.storage,
+                acc.out_row_data.status,
+                acc.result_lo.status,
+                acc.result_hi.status,
+                acc.status.fields.busy,
+                acc.status.fields.done,
+                acc.status.fields.error,
+                acc.status.fields.req_saturated,
+                acc.status.fields.err_code,
+                acc.status.fields.rows_completed,
+                acc.perf_cycles.status,
+                acc.perf_bus_beats.status,
+                acc.perf_sat_rows.status,
+            }
+
+    dut = _AccelSynthTop()
+    top_name = f"ternary_accel_R{rows}_L{lanes}_G{group_size}_K{max_k}"
+    nodsp_flag = " -nodsp" if nodsp else ""
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        v_path = tmp / f"{top_name}.v"
+        xc7_json = tmp / "xc7.json"
+        ecp5_json = tmp / "ecp5.json"
+
+        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+        v_out.write(str(v_path))
+
+        subprocess.run(
+            [
+                "yosys",
+                "-q",
+                "-p",
+                f"read_verilog {v_path}; "
+                f"synth_xilinx -family xc7 -top {top_name} -noiopad{nodsp_flag}; "
+                f"tee -q -o {xc7_json} stat -json",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "yosys",
+                "-q",
+                "-p",
+                f"read_verilog {v_path}; "
+                f"synth_ecp5 -top {top_name}{nodsp_flag}; "
+                f"tee -q -o {ecp5_json} stat -json",
+            ],
+            check=True,
+        )
+
+        xc7_cells: dict[str, int] = json.loads(xc7_json.read_text(encoding="utf-8"))["modules"][
+            f"\\{top_name}"
+        ]["num_cells_by_type"]
+        ecp5_cells: dict[str, int] = json.loads(ecp5_json.read_text(encoding="utf-8"))["modules"][
+            f"\\{top_name}"
+        ]["num_cells_by_type"]
+
+    xc7_lut6 = sum(
+        cnt
+        for cell, cnt in xc7_cells.items()
+        if cell in {"LUT1", "LUT2", "LUT3", "LUT4", "LUT5", "LUT6"}
+    )
+    xc7_ffs = sum(cnt for cell, cnt in xc7_cells.items() if cell.startswith("FD"))
+    xc7_brams = sum(cnt for cell, cnt in xc7_cells.items() if cell.startswith("RAMB"))
+    xc7_dsps = sum(cnt for cell, cnt in xc7_cells.items() if "DSP" in cell)
+
+    ecp5_lut4 = sum(cnt for cell, cnt in ecp5_cells.items() if cell.startswith("LUT4"))
+    ecp5_ffs = sum(cnt for cell, cnt in ecp5_cells.items() if cell.startswith(("TRELLIS_FF", "FD")))
+    ecp5_dp16kd = sum(cnt for cell, cnt in ecp5_cells.items() if "16KD" in cell)
+    ecp5_dsps = sum(cnt for cell, cnt in ecp5_cells.items() if "MULT18" in cell or "ALU" in cell)
+
+    if nodsp and (xc7_dsps != 0 or ecp5_dsps != 0):
+        raise RuntimeError(
+            f"[scripts/resource_report.py:run_accel_bram_characterization] expected 0 DSPs in "
+            f"-nodsp mode, got xc7_dsps={xc7_dsps}, ecp5_dsps={ecp5_dsps}."
+        )
+    if xc7_brams == 0 or ecp5_dp16kd == 0:
+        raise RuntimeError(
+            f"[scripts/resource_report.py:run_accel_bram_characterization] synchronous BRAM "
+            f"inference failed: got xc7_brams={xc7_brams}, ecp5_dp16kd={ecp5_dp16kd}."
+        )
+
+    return AccelBramMetrics(
+        rows=rows,
+        lanes=lanes,
+        group_size=group_size,
+        max_k=max_k,
+        max_rows=max_rows,
+        nodsp=nodsp,
+        xc7_lut6=xc7_lut6,
+        xc7_ffs=xc7_ffs,
+        xc7_brams=xc7_brams,
+        xc7_dsps=xc7_dsps,
+        ecp5_lut4=ecp5_lut4,
+        ecp5_ffs=ecp5_ffs,
+        ecp5_dp16kd=ecp5_dp16kd,
+        ecp5_dsps=ecp5_dsps,
+    )
+
+
 def render_markdown(
     metrics: list[SynthMetrics],
     vendor_rows: list[VendorRowMetrics],
     nodsp: bool = True,
     requantize_stage: RequantizeStageMetrics | None = None,
+    accel_soc: AccelBramMetrics | None = None,
 ) -> str:
     """Format multi-vendor sweep, board capacity, and bandwidth analysis as Markdown."""
     title_suffix = " (0-DSP Default / -nodsp)" if nodsp else " (Opt-In 1 DSP/row Mode)"
@@ -717,6 +897,27 @@ def render_markdown(
             ]
         )
 
+    if accel_soc is not None:
+        lines.extend(
+            [
+                "",
+                "## 5. Multi-Row SoC & Sync BRAM Inference (`TernaryAccel`, Task 3.1b)",
+                "",
+                f"Full `TernaryAccel(R={accel_soc.rows}, L={accel_soc.lanes}, "
+                f"G={accel_soc.group_size}, max_k={accel_soc.max_k}, "
+                f"max_rows={accel_soc.max_rows})` (`WeightUnpacker` + `(R-1)` sync-BRAM stripe "
+                "banks + `TernaryTile` + `Requantize` + activation/output scratchpad BRAMs):",
+                "",
+                "| Geometry | XC7 LUT6 | XC7 FFs | XC7 BRAM (`RAMB18/36`) | XC7 DSP | ECP5 LUT4 "
+                "| ECP5 FFs | ECP5 BRAM (`DP16KD`) | ECP5 MULT18 |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+                f"| `R={accel_soc.rows}, L={accel_soc.lanes}, K={accel_soc.max_k}` | "
+                f"{accel_soc.xc7_lut6} | {accel_soc.xc7_ffs} | {accel_soc.xc7_brams} | "
+                f"{accel_soc.xc7_dsps} | {accel_soc.ecp5_lut4} | {accel_soc.ecp5_ffs} | "
+                f"{accel_soc.ecp5_dp16kd} | {accel_soc.ecp5_dsps} |",
+            ]
+        )
+
     return "\n".join(lines) + "\n"
 
 
@@ -787,6 +988,7 @@ def main(argv: list[str] | None = None) -> int:
     metrics = run_sweep(nodsp=nodsp)
     vendor_rows = run_multivendor_reference(nodsp=nodsp)
     req_stage = run_requantize_characterization(nodsp=nodsp)
+    accel_soc = run_accel_bram_characterization(nodsp=nodsp)
     ecp5_row = next(vr for vr in vendor_rows if vr.vendor == "ecp5")
     nodsp_flag = " -nodsp" if nodsp else ""
     payload = {
@@ -796,10 +998,17 @@ def main(argv: list[str] | None = None) -> int:
         "configs": [asdict(m) for m in metrics],
         "multivendor_ref": [asdict(vr) for vr in vendor_rows],
         "requantize_stage": asdict(req_stage),
+        "ternary_accel_soc": asdict(accel_soc),
     }
 
     json_text = json.dumps(payload, indent=2) + "\n"
-    md_text = render_markdown(metrics, vendor_rows, nodsp=nodsp, requantize_stage=req_stage)
+    md_text = render_markdown(
+        metrics,
+        vendor_rows,
+        nodsp=nodsp,
+        requantize_stage=req_stage,
+        accel_soc=accel_soc,
+    )
 
     if args.check:
         check_baseline(metrics, DEFAULT_BASELINE)

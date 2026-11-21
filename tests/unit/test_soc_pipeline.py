@@ -248,10 +248,13 @@ def _run_ttape_layers_on_soc(
             yield accel.trit_valid.eq(0)
             yield accel.trit_last.eq(0)
             yield accel.scale_valid.eq(0)
-            for _ in range(4):
-                yield
 
-            status_val = yield from wb_read(status_addr)
+            # Poll status.busy (bit 0) with a tight bound while R-row tile drains at 1 row/cycle
+            status_val = 0
+            for _poll in range(16):
+                status_val = yield from wb_read(status_addr)
+                if (status_val & 0x1) == 0:
+                    break
             done_bit = (status_val >> 1) & 0x1
             rows_done = (status_val >> 16) & 0xFFFF
             assert done_bit == 1 and rows_done == layer.n_rows, (
@@ -435,7 +438,7 @@ def test_ternary_accel_constructor_and_csr_check_guards(tmp_path: Path) -> None:
 
 def test_soc_result_hi_lo_48bit_sign_extension_and_act_ptr_wrap() -> None:
     """Verify 48-bit result_hi/result_lo sign extension (>32-bit sums) and act_wr_ptr wrap."""
-    accel = TernaryAccel(lanes=4, group_size=16, beat_bits=16, max_k=16, max_rows=4)
+    accel = TernaryAccel(rows=1, lanes=4, group_size=16, beat_bits=16, max_k=16, max_rows=4)
 
     def tb():
         # Write starting at total_act_words - 1 (3) so act_wr_ptr wraps 3 -> 0 -> 1 -> 2
@@ -544,3 +547,232 @@ def test_targets_sim_cli_modes(
         integrated_main_ram_size=0x1000,
     )
     assert hasattr(soc_wb, "host_wb") and not hasattr(soc_wb, "crg")
+
+
+def test_csr_doc_and_3_1a_autocsr_offset_stability() -> None:
+    """Task 3.1b: Verify docs/CSR.md covers all TernaryAccel CSRs and 3.1a offsets stay fixed."""
+    csr_doc = (REPO_ROOT / "docs" / "CSR.md").read_text(encoding="utf-8")
+    _, addrs, csr_data = _build_soc_with_csr_map(lanes=64, group_size=128, beat_bits=256)
+
+    base = addrs["ternary_accel_ctrl"]
+    # All 10 Task 3.1a CSRs must remain at exact offsets +0x00 .. +0x24
+    expected_3_1a = [
+        ("ternary_accel_ctrl", 0x00),
+        ("ternary_accel_cfg", 0x04),
+        ("ternary_accel_info", 0x08),
+        ("ternary_accel_status", 0x0C),
+        ("ternary_accel_act_word_idx", 0x10),
+        ("ternary_accel_act_word_data", 0x14),
+        ("ternary_accel_result_lo", 0x18),
+        ("ternary_accel_result_hi", 0x1C),
+        ("ternary_accel_out_row_idx", 0x20),
+        ("ternary_accel_out_row_data", 0x24),
+    ]
+    for reg_name, rel_off in expected_3_1a:
+        got_off = addrs[reg_name] - base
+        assert got_off == rel_off, (
+            f"[test_soc_pipeline:offset_stability] 3.1a CSR '{reg_name}' drifted: "
+            f"expected offset 0x{rel_off:02x}, got 0x{got_off:02x}"
+        )
+
+    # All new 3.1b CSRs must exist after +0x24 and be documented in docs/CSR.md
+    new_3_1b = [
+        "tile_info",
+        "buf_caps",
+        "dim_k",
+        "weight_addr",
+        "scale_addr",
+        "act_addr",
+        "out_addr",
+        "act_scale",
+        "req_cfg",
+        "perf_cycles",
+        "perf_bus_beats",
+        "perf_sat_rows",
+    ]
+    for short_name in new_3_1b:
+        full_name = f"ternary_accel_{short_name}"
+        assert full_name in addrs, f"Missing 3.1b CSR '{full_name}' in csr.json"
+        assert addrs[full_name] > base + 0x24, f"CSR '{full_name}' placed before 3.1a boundary"
+        assert f"`{short_name}`" in csr_doc, f"CSR '{short_name}' undocumented in docs/CSR.md"
+
+    # Default SetunSimSoC TernaryAccel must instantiate rows=4, max_k=2048, max_rows=2048
+    soc_default = SetunSimSoC(
+        with_accel_stub=False,
+        with_ternary_accel=True,
+        use_external_crg=False,
+        cpu_type=None,
+        integrated_rom_size=0,
+        integrated_main_ram_size=0x1000,
+    )
+    assert soc_default.ternary_accel.rows == 4
+    assert soc_default.ternary_accel.max_k == 2048
+    assert soc_default.ternary_accel.max_rows == 2048
+    assert "ternary_accel" in csr_data["cores"]
+
+
+@pytest.mark.slow
+def test_soc_3_1b_start_multirow_requantize_and_illegal_params() -> None:
+    """Task 3.1b: Test ctrl.start multi-row GEMV, Requantize saturation, and non-hanging errors."""
+    from setun.ref.ops import requantize_vec_int8, tile_gemv
+
+    soc = SetunSimSoC(
+        with_accel_stub=False,
+        with_ternary_accel=True,
+        accel_rows=4,
+        accel_lanes=16,
+        accel_group_size=64,
+        accel_beat_bits=64,
+        accel_max_k=256,
+        accel_max_rows=32,
+        expose_host_wb=True,
+        use_external_crg=False,
+        cpu_type=None,
+        integrated_rom_size=0,
+        integrated_main_ram_size=0x1000,
+    )
+    soc.finalize()
+    csr_json = json.loads(
+        export.get_csr_json(
+            soc=soc,
+            csr_regions=soc.csr.regions,
+            constants=soc.constants,
+            mem_regions=soc.mem_regions,
+        )
+    )
+    addrs = {k: int(v["addr"]) for k, v in csr_json["csr_registers"].items()}
+    accel: TernaryAccel = soc.ternary_accel
+    wb = soc.host_wb
+
+    rng = np.random.default_rng(20260312)
+    n_rows, k_cols, group_size, lanes, rows, shift = 7, 128, 64, 16, 4, 5
+    w = rng.choice(np.array([-1, 0, 1], dtype=np.int8), size=(n_rows, k_cols))
+    x = rng.integers(-128, 128, size=k_cols, dtype=np.int8)
+    s = rng.integers(100, 3000, size=(n_rows, k_cols // group_size), dtype=np.uint16)
+    layer = pack_ternary_tensor(w, s, group_size=group_size, shift=shift)
+
+    trit_words, flat_scales, k_pad = _prepare_layer_stream_words(layer, beat_bits=64)
+    act_words = _pack_activation_words_i8(x, k_pad)
+    exp_raw = tile_gemv(w, x, s, group_size=group_size, lanes=lanes, rows=rows, shift=shift)
+    req_scale, req_shift = 512, 10
+    exp_req_i8, exp_req_sat = requantize_vec_int8(exp_raw, req_scale, req_shift, symmetric=True)
+
+    def wb_read(byte_addr: int):
+        return (yield from wb.read(byte_addr >> 2))
+
+    def wb_write(byte_addr: int, data: int):
+        yield from wb.write(byte_addr >> 2, data & 0xFFFFFFFF)
+
+    def _stream_weights():
+        w_ptr, s_ptr = 0, 0
+        while w_ptr < len(trit_words) or s_ptr < len(flat_scales):
+            yield accel.trit_data.eq(trit_words[w_ptr][0] if w_ptr < len(trit_words) else 0)
+            yield accel.trit_last.eq(trit_words[w_ptr][1] if w_ptr < len(trit_words) else 0)
+            yield accel.trit_valid.eq(1 if w_ptr < len(trit_words) else 0)
+            yield accel.scale_data.eq(flat_scales[s_ptr] if s_ptr < len(flat_scales) else 0)
+            yield accel.scale_valid.eq(1 if s_ptr < len(flat_scales) else 0)
+            yield
+            if w_ptr < len(trit_words) and (yield accel.trit_ready):
+                w_ptr += 1
+            if s_ptr < len(flat_scales) and (yield accel.scale_ready):
+                s_ptr += 1
+        yield accel.trit_valid.eq(0)
+        yield accel.trit_last.eq(0)
+        yield accel.scale_valid.eq(0)
+
+    def tb():
+        # 1. Check tile_info & buf_caps 16-bit fields (Refinement #1)
+        t_info = yield from wb_read(addrs["ternary_accel_tile_info"])
+        b_caps = yield from wb_read(addrs["ternary_accel_buf_caps"])
+        assert t_info == (rows | (lanes << 8) | (group_size << 16))
+        assert b_caps == (256 | (32 << 16))
+
+        # Stage activations into synchronous BRAM once
+        yield from wb_write(addrs["ternary_accel_act_word_idx"], 0)
+        for aw in act_words:
+            yield from wb_write(addrs["ternary_accel_act_word_data"], aw)
+
+        # 2. Exercise all 4 illegal parameter classes via ctrl.start (must NEVER hang!)
+        illegal_cases = [
+            # (cfg_n, dim_k_val, dim_g_val, w_addr, s_addr, a_addr, o_addr, exp_err_bit)
+            (7, 0, 64, 0, 0, 0, 0, 0x1),  # K == 0 -> ERR_K_INVALID
+            (7, 300, 64, 0, 0, 0, 0, 0x1),  # K > max_k (256) -> ERR_K_INVALID
+            (0, 128, 64, 0, 0, 0, 0, 0x2),  # N == 0 -> ERR_N_INVALID
+            (33, 128, 64, 0, 0, 0, 0, 0x2),  # N > max_rows (32) -> ERR_N_INVALID
+            (7, 128, 128, 0, 0, 0, 0, 0x4),  # G != hw_group_size (64) -> ERR_G_MISMATCH
+            (7, 128, 64, 0x40000002, 0, 0, 0, 0x8),  # misaligned weight_addr -> ERR_ADDR_ALIGN
+            (7, 128, 64, 0, 0, 0, 0x40000001, 0x8),  # misaligned out_addr -> ERR_ADDR_ALIGN
+        ]
+        for c_n, c_k, c_g, wa, sa, aa, oa, exp_err in illegal_cases:
+            yield from wb_write(addrs["ternary_accel_cfg"], shift | (c_n << 8))
+            yield from wb_write(addrs["ternary_accel_dim_k"], c_k | (c_g << 16))
+            yield from wb_write(addrs["ternary_accel_weight_addr"], wa)
+            yield from wb_write(addrs["ternary_accel_scale_addr"], sa)
+            yield from wb_write(addrs["ternary_accel_act_addr"], aa)
+            yield from wb_write(addrs["ternary_accel_out_addr"], oa)
+            # Pulse ctrl.start (bit 2) + enable (bit 0) -> 0b101
+            yield from wb_write(addrs["ternary_accel_ctrl"], 0b00101)
+            st = yield from wb_read(addrs["ternary_accel_status"])
+            busy = st & 0x1
+            done = (st >> 1) & 0x1
+            err = (st >> 4) & 0x1
+            err_code = (st >> 8) & 0xF
+            assert err == 1 and busy == 0 and done == 0 and (err_code & exp_err) == exp_err, (
+                f"[test_soc_pipeline:illegal_params] expected err=1, busy=0, done=0, "
+                f"err_code&0x{exp_err:x} on ({c_n}, {c_k}, {c_g}, 0x{wa:x}, 0x{oa:x}), "
+                f"got status=0x{st:08x}"
+            )
+
+        # 3. Sticky error recovery WITHOUT SoC reset (Refinement #5): launch valid raw GEMV
+        yield from wb_write(addrs["ternary_accel_weight_addr"], 0)
+        yield from wb_write(addrs["ternary_accel_out_addr"], 0)
+        yield from wb_write(addrs["ternary_accel_cfg"], shift | (n_rows << 8))
+        yield from wb_write(addrs["ternary_accel_dim_k"], k_cols | (group_size << 16))
+        yield from wb_write(addrs["ternary_accel_act_scale"], 0x3F800000)
+        yield from wb_write(addrs["ternary_accel_ctrl"], 0b00101)  # enable=1, start=1
+
+        st_after_start = yield from wb_read(addrs["ternary_accel_status"])
+        assert ((st_after_start >> 4) & 0x1) == 0 and ((st_after_start >> 8) & 0xF) == 0
+
+        yield from _stream_weights()
+        for _ in range(12):
+            yield
+
+        st_done = yield from wb_read(addrs["ternary_accel_status"])
+        assert ((st_done >> 1) & 0x1) == 1 and ((st_done >> 16) & 0xFFFF) == n_rows
+        p_cyc = yield from wb_read(addrs["ternary_accel_perf_cycles"])
+        p_beats = yield from wb_read(addrs["ternary_accel_perf_bus_beats"])
+        assert p_cyc > 0 and p_beats == len(trit_words)
+
+        for r in range(n_rows):
+            yield from wb_write(addrs["ternary_accel_out_row_idx"], r)
+            got_r = _to_signed_i32((yield from wb_read(addrs["ternary_accel_out_row_data"])))
+            assert got_r == int(exp_raw[r]), (
+                f"[test_soc_pipeline:start_raw] row {r} mismatch: "
+                f"expected {int(exp_raw[r])}, got {got_r}"
+            )
+
+        # 4. Launch with Requantize enabled + symmetric=1 (Refinement #4 saturation telemetry)
+        yield from wb_write(addrs["ternary_accel_req_cfg"], req_scale | (req_shift << 16))
+        # enable=1 (b0), start=1 (b2), req_enable=1 (b3), req_sym=1 (b4) -> 0b11101
+        yield from wb_write(addrs["ternary_accel_ctrl"], 0b11101)
+        yield from _stream_weights()
+        for _ in range(16):
+            yield
+
+        st_req = yield from wb_read(addrs["ternary_accel_status"])
+        sat_flag = (st_req >> 5) & 0x1
+        sat_cnt = yield from wb_read(addrs["ternary_accel_perf_sat_rows"])
+        exp_sat_cnt = int(np.sum(exp_req_sat))
+        assert sat_flag == (1 if exp_sat_cnt > 0 else 0)
+        assert sat_cnt == exp_sat_cnt
+
+        for r in range(n_rows):
+            yield from wb_write(addrs["ternary_accel_out_row_idx"], r)
+            got_q = _to_signed_i32((yield from wb_read(addrs["ternary_accel_out_row_data"])))
+            assert got_q == int(exp_req_i8[r]), (
+                f"[test_soc_pipeline:start_req] row {r} mismatch: "
+                f"expected {int(exp_req_i8[r])}, got {got_q}"
+            )
+
+    run_migen_sim(soc, tb)

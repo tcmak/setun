@@ -33,7 +33,7 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 ### Block C — LiteX SoC Integration & DMA
 - [x] `0.4` Minimal CSR peripheral stub in `SimSoC` (`setun/accelerators/stub.py`, `targets/sim.py`)
 - [x] `3.1a` Single-row `TernaryAccel` LiteX wrapper, `.ttape` composition test & deterministic CSR export (`setun/soc/ternary_accel.py`, `reports/csr.json`, `reports/csr.h`)
-- [ ] `3.1b` Document CSR register contract (`docs/CSR.md`) and upgrade `TernaryAccel` to wrap multi-row `TernaryTile`
+- [x] `3.1b` Document CSR register contract (`docs/CSR.md`) and upgrade `TernaryAccel` to wrap multi-row `TernaryTile`
 - [ ] `3.2` Weight DMA burst reader from SimSoC SDRAM + activation/output scratchpad BRAMs
 
 ### Block D — Hybrid Decode & Gate 3

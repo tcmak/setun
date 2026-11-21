@@ -167,5 +167,21 @@
     "ecp5_ffs": 117,
     "ecp5_dsps": 0,
     "ecp5_fmax_mhz": 49.08
+  },
+  "ternary_accel_soc": {
+    "rows": 4,
+    "lanes": 64,
+    "group_size": 128,
+    "max_k": 2048,
+    "max_rows": 2048,
+    "nodsp": true,
+    "xc7_lut6": 20381,
+    "xc7_ffs": 1948,
+    "xc7_brams": 9,
+    "xc7_dsps": 0,
+    "ecp5_lut4": 36708,
+    "ecp5_ffs": 1948,
+    "ecp5_dp16kd": 17,
+    "ecp5_dsps": 0
   }
 }

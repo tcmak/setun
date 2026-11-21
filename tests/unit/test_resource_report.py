@@ -261,6 +261,8 @@ def test_resource_report_pipelines_error_guards_and_cli(
         rr.run_sweep()
     with pytest.raises(RuntimeError, match="yosys not found"):
         rr.run_requantize_characterization()
+    with pytest.raises(RuntimeError, match="yosys not in PATH"):
+        rr.run_accel_bram_characterization()
 
     # Restore shutil.which for mocked pipeline tests
     monkeypatch.undo()
@@ -315,6 +317,40 @@ def test_resource_report_pipelines_error_guards_and_cli(
         rr.run_requantize_characterization(in_bits=16, out_bits=8, nodsp=True)
     monkeypatch.undo()
 
+    # 3c. run_accel_bram_characterization 0-DSP and 0-BRAM guards
+    def _fake_accel_run(dsps: int, brams: int):
+        def _run(cmd: list[str], **_kwargs: object) -> None:
+            prompt = cmd[-1]
+            stat_file = Path(prompt.split("tee -q -o ")[1].split(" stat -json")[0])
+            top = prompt.split("-top ")[1].split()[0]
+            cells = {
+                "LUT6": 100,
+                "FDRE": 20,
+                "RAMB18E1": brams,
+                "DSP48E1": dsps,
+                "LUT4": 100,
+                "TRELLIS_FF": 20,
+                "DP16KD": brams,
+            }
+            stat_file.write_text(
+                json.dumps({"modules": {f"\\{top}": {"num_cells_by_type": cells}}}),
+                encoding="utf-8",
+            )
+
+        return _run
+
+    monkeypatch.setattr(rr.subprocess, "run", _fake_accel_run(dsps=1, brams=4))
+    with pytest.raises(RuntimeError, match="expected 0 DSPs"):
+        rr.run_accel_bram_characterization(
+            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=128, max_rows=64, nodsp=True
+        )
+    monkeypatch.setattr(rr.subprocess, "run", _fake_accel_run(dsps=0, brams=0))
+    with pytest.raises(RuntimeError, match="synchronous BRAM inference failed"):
+        rr.run_accel_bram_characterization(
+            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=128, max_rows=64, nodsp=True
+        )
+    monkeypatch.undo()
+
     # 4. render_markdown with nodsp=False (DSP-limited board fit), requantize_stage, and bad fmax
     sample_dsp = [
         SynthMetrics(1, 64, 128, 8, 64, 2697, 66, 1, 42.141, 1.0, nodsp=False, vendor="xc7")
@@ -356,6 +392,13 @@ def test_resource_report_pipelines_error_guards_and_cli(
         "run_requantize_characterization",
         lambda **_kw: rr.RequantizeStageMetrics(48, 8, True, 2640, 117, 0, 6017, 117, 0, 49.08),
     )
+    monkeypatch.setattr(
+        rr,
+        "run_accel_bram_characterization",
+        lambda **_kw: rr.AccelBramMetrics(
+            4, 64, 128, 2048, 2048, True, 20381, 1948, 9, 0, 36708, 1948, 17, 0
+        ),
+    )
 
     rep_dir = tmp_path / "reports"
     j_path = rep_dir / "resources.json"
@@ -381,3 +424,16 @@ def test_resource_report_pipelines_error_guards_and_cli(
     j_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="deterministic report invariant violated"):
         rr.main(["--check"])
+
+
+@pytest.mark.slow
+def test_ternary_accel_bram_inference() -> None:
+    """Task 3.1b: Verify TernaryAccel infers real XC7 RAMB18E1/36E1 and ECP5 DP16KD BRAMs."""
+    from scripts.resource_report import run_accel_bram_characterization
+
+    bram_metrics = run_accel_bram_characterization(
+        rows=4, lanes=16, group_size=64, beat_bits=64, max_k=512, max_rows=512, nodsp=True
+    )
+    assert bram_metrics.xc7_dsps == 0 and bram_metrics.ecp5_dsps == 0
+    assert bram_metrics.xc7_brams >= 2, f"Expected XC7 BRAM inference, got {bram_metrics}"
+    assert bram_metrics.ecp5_dp16kd >= 2, f"Expected ECP5 DP16KD inference, got {bram_metrics}"

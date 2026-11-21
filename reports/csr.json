@@ -93,6 +93,66 @@
             "size": 1,
             "type": "ro"
         },
+        "ternary_accel_tile_info": {
+            "addr": 6184,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_buf_caps": {
+            "addr": 6188,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_dim_k": {
+            "addr": 6192,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_weight_addr": {
+            "addr": 6196,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_scale_addr": {
+            "addr": 6200,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_act_addr": {
+            "addr": 6204,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_out_addr": {
+            "addr": 6208,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_act_scale": {
+            "addr": 6212,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_req_cfg": {
+            "addr": 6216,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_perf_cycles": {
+            "addr": 6220,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_perf_bus_beats": {
+            "addr": 6224,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_perf_sat_rows": {
+            "addr": 6228,
+            "size": 1,
+            "type": "ro"
+        },
         "timer0_load": {
             "addr": 8192,
             "size": 1,
