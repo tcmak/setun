@@ -2,7 +2,11 @@
 
 - **Current Season:** Season 2 (Streaming `TernaryTile`, M0 golden model, and first token in SimSoC — Gate 3)
 - **Completed Seasons:** Season 1 (`0.1`, `0.2a`, `0.3`, `0.5a/b`, `0.6a`, `1.3a`, `1.4a`, `2.1`, `2.2`, `2.6`, `2.8`, `S1.end` ADRs)
-- **Completed in Season 2:** `0.4` (`AccelStub` CSR peripheral in `targets/sim.py`), `1.5` & `1.6` (`setun/ref/m0.py` + `scripts/make_toy.py`), `2.3` (`setun/accelerators/unpacker.py`), `A1` (toolchain pin `migen==0.10.0`, LF enforcement, host/compiler stub pruning, CI workflow), `B2` & `B2a` (vendored `TernaryTape.jl` via HTTPS submodule, `ADR-014`, migrated `setun/ref/format.py` to `"TTAP"`), `C1.3` (verified end-to-end `Lux.Chain` grouped `.ttape` forward inference in `setun/ref/m0.py` across 21 golden fixtures and pinned frozen `TTAPE` `spec-v1.0`), `C1.1` (mid-row `in_valid` bubble resilience tests for `TernaryDot`/`GroupAccumulateScale`/`TernaryRow`, real `nextpnr-ecp5` `fmax_mhz` extraction + `[EXTRAPOLATED from R=1]` labels in `reports/resources.{json,md}`, and `TernaryAccel` LiteX SoC wrapper + `.ttape` composition tests + deterministic `reports/csr.{json,h}`)
-- **Next Tasks (Season 2 — Block B & Block C):**
-  1. `2.4` & `2.5`: Multi-row `TernaryTile` (`R` parallel rows, shared activation broadcast, `valid`/`ready` backpressure) and output requantization (`int8` saturation)
-  2. `3.1` & `3.2`: Extend `TernaryAccel` with SDRAM weight DMA burst reader (`docs/CSR.md`) and multi-row tile integration
+- **Completed in Season 2:**
+  - **Block A (`1.5`, `1.6`):** `setun/ref/m0.py`, `scripts/make_toy.py`, frozen `TTAPE` `spec-v1.0` submodule (`third_party/TernaryTape`), and end-to-end `Lux.Chain` grouped `.ttape` golden verification.
+  - **Block B (`2.3`):** `setun/accelerators/unpacker.py`, mid-row `in_valid` bubble resilience across `TernaryDot`/`GroupAccumulateScale`/`TernaryRow`, and real `nextpnr-ecp5` `fmax_mhz` extraction in `scripts/resource_report.py`.
+  - **Block C (`0.4`, `3.1a`):** `AccelStub` (`targets/sim.py`) and single-row `TernaryAccel` LiteX wrapper (`setun/soc/ternary_accel.py`) with `.ttape` composition tests (`tests/unit/test_soc_pipeline.py`) and generated `reports/csr.{json,h}`.
+- **Next Tasks (in `PLAN.md` order):**
+  1. **`2.4` — Multi-row `TernaryTile`:** Reference model + red unit tests for `R` parallel rows with shared activation broadcast and `valid`/`ready` backpressure; once RTL lands (maintainer-owned or explicitly delegated), synthesize real `R=4` and `R=8` figures to replace `[EXTRAPOLATED from R=1]` in `reports/resources.{json,md}`.
+  2. **`2.5` & `2.8b` — Output Requantization & Tile Regression:** `int8` saturation/requantization stage and nightly Verilator sweep coverage for `TernaryTile`.
+  3. **`3.1b` & `3.2` — Multi-row SoC & SDRAM DMA:** Write `docs/CSR.md`, wire `TernaryTile` into `TernaryAccel`, and add SimSoC SDRAM weight DMA burst reader + activation/output scratchpad BRAMs.
