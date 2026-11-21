@@ -6,7 +6,7 @@
 
 ## Status & Roadmap
 
-* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; 2-stage `int8` `Requantize` online; tile nightly sweep and full-chip `M0` cosimulation next).
+* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; Season 2 Block B datapath (`WeightUnpacker`, `TernaryTile`, `Requantize`, PR/nightly Verilator sweeps) complete; multi-row SoC CSRs, SDRAM DMA, and `M0` cosimulation next).
 
 * **Facts Checked:** `2026-11-21`
 

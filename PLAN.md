@@ -28,7 +28,7 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 - [x] `2.3` Weight unpacker (`setun/accelerators/unpacker.py`: packed beat → `L` trits + aligned group scale stream)
 - [x] `2.4` Multi-row `TernaryTile` (`R` parallel rows, shared activation broadcast, `valid`/`ready` backpressure; replace `[EXTRAPOLATED from R=1]` in `reports/resources.{json,md}` with synthesized `R=4` / `R=8` figures)
 - [x] `2.5` Output requantization & `int8` saturation
-- [ ] `2.8b` Extend randomized nightly Verilator regression (`tests/unit/test_regression_sweep.py`) to `TernaryTile`
+- [x] `2.8b` Extend randomized nightly Verilator regression (`tests/unit/test_regression_sweep.py`) to `TernaryTile`
 
 ### Block C — LiteX SoC Integration & DMA
 - [x] `0.4` Minimal CSR peripheral stub in `SimSoC` (`setun/accelerators/stub.py`, `targets/sim.py`)
