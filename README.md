@@ -53,7 +53,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
   * **DSP Usage Modes (`ADR-004`):** By default, synthesis runs in **zero-DSP mode** (`0 DSPs` across the entire row, mapping the once-per-group $16\text{-bit} \times 16\text{-bit}$ scale multiply to pure LUT fabric: `3,300 LUT6, 114 FFs, 0 DSP48E1` at $L=64, G=128$). Passing `--use-dsp` to `scripts/resource_report.py` opts into **1 `DSP48E1` slice per row** (`2,697 LUT6, 66 FFs, 1 DSP48E1`).
 
-* **LiteX CSR Peripheral (`setun/accelerators/stub.py` & `targets/sim.py`):** `SetunSimSoC` integrates LiteX `AutoCSR` peripherals (`ID`, `VERSION`, `SCRATCH`, free-running cycle `COUNTER`) over a 32-bit Wishbone bus with automated `csr.json` address-map export.
+* **LiteX SoC Wrapper & CSR Peripherals (`setun/soc/ternary_accel.py`, `setun/accelerators/stub.py` & `targets/sim.py`):** `SetunSimSoC` integrates both `AccelStub` (`ID`, `VERSION`, `SCRATCH`, free-running cycle `COUNTER`) and `TernaryAccel` (wiring `WeightUnpacker` $\to$ `TernaryDot` $\to$ `GroupAccumulateScale` with CSR activation staging, programmable round-half-up `shift`, completion status, and row result readback) over a 32-bit Wishbone bus, deterministically exporting [`reports/csr.json`](reports/csr.json) and [`reports/csr.h`](reports/csr.h).
 
 ### 2. Numerics, Weight Format & Golden Model (`setun/ref/`)
 
@@ -79,17 +79,17 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 * **`setun/ref/`** — Golden Python/NumPy reference ops (`ops.py`), pack/unpack binary codec (`format.py`), and `M0` decoder (`m0.py`).
 
-* **`setun/sim/`** — Reusable `cocotb` + Verilator simulation runner and Wishbone bus helpers.
+* **`setun/soc/`** — LiteX `AutoCSR` wrapper (`TernaryAccel`) and deterministic `csr.json` / `csr.h` exporter (`export_soc_csr_artifacts`).
 
-* **`targets/sim.py`** — LiteX `SetunSimSoC` target with Wishbone interconnect and `csr.json` exporter.
+* **`targets/sim.py`** — LiteX `SetunSimSoC` target with Wishbone interconnect and deterministic CSR exporter (`--export-csr-reports`).
 
-* **`scripts/`** — Toolchain verifier (`doctor.py`), deterministic `M0` weight generator (`make_toy.py`), and Yosys XC7 resource characterization (`resource_report.py`).
+* **`scripts/`** — Toolchain verifier (`doctor.py`), deterministic `M0` weight generator (`make_toy.py`), and Yosys + `nextpnr-ecp5` resource/timing characterization (`resource_report.py`).
 
-* **`tests/unit/`** — `pytest` + Verilator `cocotb` testbenches and randomized regression sweeps.
+* **`tests/unit/`** — `pytest`, Migen, and Verilator `cocotb` testbenches, SoC `.ttape` composition tests, and randomized regression sweeps.
 
-* **`docs/`** — Architecture specs (`FORMAT.md`, `NUMERICS.md`, `models.md`, `FIELD_GUIDE.md`, `decisions.md`, `open-questions.md`, `phases.md`).
+* **`docs/`** — Architecture specs (`FORMAT.md`, `NUMERICS.md`, `models.md`, `decisions.md`, `open-questions.md`, `phases.md`, `log.md`).
 
-* **`reports/`** — Generated Yosys resource characterization tables (`resources.md`, `resources.json`) and `baseline.json`.
+* **`reports/`** — Deterministically generated Yosys/`nextpnr-ecp5` resource tables (`resources.md`, `resources.json`), `baseline.json`, and LiteX SoC register maps (`csr.json`, `csr.h`).
 
 ## Quickstart & Usage
 

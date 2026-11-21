@@ -1,0 +1,220 @@
+{
+    "csr_bases": {
+        "accel_stub": 0,
+        "ctrl": 2048,
+        "identifier_mem": 4096,
+        "ternary_accel": 6144,
+        "timer0": 8192,
+        "uart": 10240
+    },
+    "csr_registers": {
+        "accel_stub_id": {
+            "addr": 0,
+            "size": 1,
+            "type": "ro"
+        },
+        "accel_stub_version": {
+            "addr": 4,
+            "size": 1,
+            "type": "ro"
+        },
+        "accel_stub_scratch": {
+            "addr": 8,
+            "size": 1,
+            "type": "rw"
+        },
+        "accel_stub_counter": {
+            "addr": 12,
+            "size": 1,
+            "type": "ro"
+        },
+        "ctrl_reset": {
+            "addr": 2048,
+            "size": 1,
+            "type": "rw"
+        },
+        "ctrl_scratch": {
+            "addr": 2052,
+            "size": 1,
+            "type": "rw"
+        },
+        "ctrl_bus_errors": {
+            "addr": 2056,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_ctrl": {
+            "addr": 6144,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_cfg": {
+            "addr": 6148,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_info": {
+            "addr": 6152,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_status": {
+            "addr": 6156,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_act_word_idx": {
+            "addr": 6160,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_act_word_data": {
+            "addr": 6164,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_result_lo": {
+            "addr": 6168,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_result_hi": {
+            "addr": 6172,
+            "size": 1,
+            "type": "ro"
+        },
+        "ternary_accel_out_row_idx": {
+            "addr": 6176,
+            "size": 1,
+            "type": "rw"
+        },
+        "ternary_accel_out_row_data": {
+            "addr": 6180,
+            "size": 1,
+            "type": "ro"
+        },
+        "timer0_load": {
+            "addr": 8192,
+            "size": 1,
+            "type": "rw"
+        },
+        "timer0_reload": {
+            "addr": 8196,
+            "size": 1,
+            "type": "rw"
+        },
+        "timer0_en": {
+            "addr": 8200,
+            "size": 1,
+            "type": "rw"
+        },
+        "timer0_update_value": {
+            "addr": 8204,
+            "size": 1,
+            "type": "rw"
+        },
+        "timer0_value": {
+            "addr": 8208,
+            "size": 1,
+            "type": "ro"
+        },
+        "timer0_ev_status": {
+            "addr": 8212,
+            "size": 1,
+            "type": "ro"
+        },
+        "timer0_ev_pending": {
+            "addr": 8216,
+            "size": 1,
+            "type": "rw"
+        },
+        "timer0_ev_enable": {
+            "addr": 8220,
+            "size": 1,
+            "type": "rw"
+        },
+        "uart_rxtx": {
+            "addr": 10240,
+            "size": 1,
+            "type": "rw"
+        },
+        "uart_txfull": {
+            "addr": 10244,
+            "size": 1,
+            "type": "ro"
+        },
+        "uart_rxempty": {
+            "addr": 10248,
+            "size": 1,
+            "type": "ro"
+        },
+        "uart_ev_status": {
+            "addr": 10252,
+            "size": 1,
+            "type": "ro"
+        },
+        "uart_ev_pending": {
+            "addr": 10256,
+            "size": 1,
+            "type": "rw"
+        },
+        "uart_ev_enable": {
+            "addr": 10260,
+            "size": 1,
+            "type": "rw"
+        },
+        "uart_txempty": {
+            "addr": 10264,
+            "size": 1,
+            "type": "ro"
+        },
+        "uart_rxfull": {
+            "addr": 10268,
+            "size": 1,
+            "type": "ro"
+        }
+    },
+    "constants": {
+        "config_platform_name": "sim",
+        "config_clock_frequency": 1000000,
+        "config_cpu_type_none": null,
+        "config_cpu_variant_standard": null,
+        "config_cpu_family": null,
+        "config_cpu_name": "None",
+        "config_cpu_human_name": "Unknown",
+        "config_bios_no_build_time": null,
+        "config_identifier": "Setun Simulated SoC",
+        "uart_polling": null,
+        "config_csr_data_width": 32,
+        "config_csr_alignment": 32,
+        "config_csr_ordering_big": null,
+        "config_bus_standard": "wishbone",
+        "config_bus_data_width": 32,
+        "config_bus_address_width": 32,
+        "config_bus_bursting": 0
+    },
+    "memories": {
+        "sram": {
+            "base": 16777216,
+            "size": 8192,
+            "type": "cached"
+        },
+        "main_ram": {
+            "base": 1073741824,
+            "size": 65536,
+            "type": "cached"
+        },
+        "csr": {
+            "base": 0,
+            "size": 65536,
+            "type": "io"
+        }
+    },
+    "cores": {
+        "accel_stub": "AccelStub",
+        "ctrl": "SoCController",
+        "ternary_accel": "TernaryAccel",
+        "timer0": "Timer",
+        "uart": "UART"
+    }
+}

@@ -1,4 +1,4 @@
-"""LiteX SimSoC target for Setun (Tasks 0.3 & 0.4)."""
+"""LiteX SimSoC target for Setun (Tasks 0.3, 0.4, & C1.1c)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from litex.soc.interconnect import wishbone
 from migen.genlib.io import CRG
 
 from setun.accelerators.stub import AccelStub
+from setun.soc.ternary_accel import TernaryAccel, export_soc_csr_artifacts
 
 _io = [
     ("sys_clk", 0, Pins(1)),
@@ -31,6 +32,10 @@ class SetunSimSoC(SoCCore):
     def __init__(
         self,
         with_accel_stub: bool = False,
+        with_ternary_accel: bool = True,
+        accel_lanes: int = 64,
+        accel_group_size: int = 128,
+        accel_beat_bits: int = 256,
         expose_host_wb: bool = False,
         use_external_crg: bool = True,
         **kwargs,
@@ -38,6 +43,7 @@ class SetunSimSoC(SoCCore):
         platform = SetunSimPlatform()
         kwargs.pop("uart_name", None)
         kwargs.setdefault("csr_data_width", 32)
+        kwargs.setdefault("ident_version", False)
 
         super().__init__(
             platform=platform,
@@ -51,6 +57,13 @@ class SetunSimSoC(SoCCore):
 
         if with_accel_stub:
             self.accel_stub = AccelStub()
+
+        if with_ternary_accel:
+            self.ternary_accel = TernaryAccel(
+                lanes=accel_lanes,
+                group_size=accel_group_size,
+                beat_bits=accel_beat_bits,
+            )
 
         if expose_host_wb:
             self.host_wb = wishbone.Interface(data_width=32, adr_width=30)
@@ -67,12 +80,27 @@ def main() -> None:
         help="Instantiate AccelStub CSR peripheral (Task 0.4)",
     )
     parser.add_argument(
+        "--no-ternary-accel",
+        action="store_true",
+        help="Disable TernaryAccel row pipeline peripheral",
+    )
+    parser.add_argument(
+        "--export-csr-reports",
+        action="store_true",
+        help="Deterministically export reports/csr.json and reports/csr.h and exit",
+    )
+    parser.add_argument(
         "--run",
         action="store_true",
         help="Launch interactive Verilator binary after building",
     )
 
     args = parser.parse_args()
+
+    if args.export_csr_reports:
+        export_soc_csr_artifacts()
+        print("[sim-csr] Exported deterministic reports/csr.json and reports/csr.h")
+        return
 
     soc_kwargs = soc_core_argdict(args)
     builder_kwargs = builder_argdict(args)
@@ -86,7 +114,11 @@ def main() -> None:
         out_dir = Path(builder_kwargs.get("output_dir") or "build/sim")
         builder_kwargs["csr_json"] = str(out_dir / "csr.json")
 
-    soc = SetunSimSoC(with_accel_stub=args.with_accel_stub, **soc_kwargs)
+    soc = SetunSimSoC(
+        with_accel_stub=args.with_accel_stub,
+        with_ternary_accel=not args.no_ternary_accel,
+        **soc_kwargs,
+    )
 
     sim_config = SimConfig()
     sim_config.add_clocker("sys_clk", freq_hz=soc.clk_freq)
