@@ -203,9 +203,9 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 2.4 `TernaryTile`: R rows × L lanes GEMV engine [L] · *S2*
 - **Do:** activation buffer (BRAM/regs) broadcast to R row engines; weight and scale streams in; output stream with row index; parameters R, L, G; LiteX `stream.Endpoint` interfaces. Decode is GEMV (batch 1): activations stay put, weights stream.
 - **Accept:**
-  - [ ] GEMV (N × K) bit-exact for shapes from M0 and M1 (for example N = 2048, K = 2048)
-  - [ ] N not a multiple of R works
-  - [ ] steady-state utilization ≥ 95% of R·L MACs/cycle when fed at line rate **(initial)**, measured and reported
+  - [X] GEMV (N × K) bit-exact for shapes from M0 and M1 (for example N = 2048, K = 2048)
+  - [X] N not a multiple of R works
+  - [X] steady-state utilization ≥ 95% of R·L MACs/cycle when fed at line rate **(initial)**, measured and reported
 
 ### 2.5 Requantize / output stage [M] · *S2*
 - **Do:** convert row results to the next op's input format (scale, round, saturate) per spec.

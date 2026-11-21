@@ -6,14 +6,14 @@ Primary XC7 sweep via Yosys (`synth_xilinx -family xc7 -noiopad -nodsp`), paired
 
 | R (rows) | L (lanes) | G | A (bits) | MACs/cycle | LUT6 | FFs | DSP48E1 | LUTs/MAC | DSPs/row | Basis |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | 16 | 64 | 8 | 16 | 1552 | 114 | 0 | 97.000 | 0.00 | SYNTHESIZED (R=1) |
-| 1 | 16 | 128 | 8 | 16 | 1528 | 116 | 0 | 95.500 | 0.00 | SYNTHESIZED (R=1) |
-| 1 | 64 | 128 | 8 | 64 | 3300 | 114 | 0 | 51.562 | 0.00 | SYNTHESIZED (R=1) |
-| 1 | 64 | 256 | 8 | 64 | 3487 | 116 | 0 | 54.484 | 0.00 | SYNTHESIZED (R=1) |
-| 1 | 128 | 128 | 8 | 128 | 5656 | 97 | 0 | 44.188 | 0.00 | SYNTHESIZED (R=1) |
-| 1 | 64 | 128 | 16 | 64 | 5838 | 122 | 0 | 91.219 | 0.00 | SYNTHESIZED (R=1) |
-| 4 | 64 | 128 | 8 | 256 | 13200 | 456 | 0 | 51.562 | 0.00 | [EXTRAPOLATED from R=1] |
-| 8 | 64 | 128 | 8 | 512 | 26400 | 912 | 0 | 51.562 | 0.00 | [EXTRAPOLATED from R=1] |
+| 1 | 16 | 64 | 8 | 16 | 1552 | 114 | 0 | 97.000 | 0.00 | SYNTHESIZED (TernaryRow) |
+| 1 | 16 | 128 | 8 | 16 | 1528 | 116 | 0 | 95.500 | 0.00 | SYNTHESIZED (TernaryRow) |
+| 1 | 64 | 128 | 8 | 64 | 3300 | 114 | 0 | 51.562 | 0.00 | SYNTHESIZED (TernaryRow) |
+| 1 | 64 | 256 | 8 | 64 | 3487 | 116 | 0 | 54.484 | 0.00 | SYNTHESIZED (TernaryRow) |
+| 1 | 128 | 128 | 8 | 128 | 5656 | 97 | 0 | 44.188 | 0.00 | SYNTHESIZED (TernaryRow) |
+| 1 | 64 | 128 | 16 | 64 | 5838 | 122 | 0 | 91.219 | 0.00 | SYNTHESIZED (TernaryRow) |
+| 4 | 64 | 128 | 8 | 256 | 13745 | 699 | 0 | 53.691 | 0.00 | SYNTHESIZED (TernaryTile R=4) |
+| 8 | 64 | 128 | 8 | 512 | 27316 | 1342 | 0 | 53.352 | 0.00 | SYNTHESIZED (TernaryTile R=8) |
 
 ## 2. Multi-Vendor Reference Row (`L=64, G=128, A=8`) for `ADR-007`
 
@@ -41,5 +41,5 @@ $$\text{Max useful MACs/cycle at }62.08\text{ MHz} = \frac{B_{mem} \times 10^9}{
 ### Key Architectural Takeaways (Gate 2 / G1 & `ADR-004`)
 - **Zero DSPs in `TernaryDot`:** All ternary MAC lanes are multiplier-free add/sub trees.
 - **Group Scale DSP Mode:** 0 DSPs everywhere (default -nodsp LUT multipliers).
-- **Measured Single-Cycle Row Timing (`nextpnr-ecp5`):** Out-of-context place-and-route on `LFE5U-85F-6BG381C` measures **62.08 MHz** across the unpipelined `group_acc + dot_in -> scale_u16 multiply -> row_acc` critical path in `GroupAccumulateScale` (pipelining for >= 100 MHz board closure scheduled in Season 3 Task `6.3`). Multi-row (`R=4`, `R=8`) figures are `[EXTRAPOLATED from R=1]` pending `TernaryTile` (`Task 2.4`).
+- **Measured Single-Cycle Row Timing (`nextpnr-ecp5`):** Out-of-context place-and-route on `LFE5U-85F-6BG381C` measures **62.08 MHz** across the unpipelined `group_acc + dot_in -> scale_u16 multiply -> row_acc` critical path in `GroupAccumulateScale` (pipelining for >= 100 MHz board closure scheduled in Season 3 Task `6.3`). Multi-row (`R=4`, `R=8`) XC7 figures are directly synthesized from `TernaryTile` (`Task 2.4`, including shared activation LUTRAM/BRAM and serialized output mux); board capacity counts remain `[EXTRAPOLATED from R=1]` per-vendor row budgets.
 - **Memory-bound regime:** Even on the smallest Artix-7 (`XC7A35T`) in 0-DSP mode, compute fabric fits more MACs/cycle than external DDR3/SPI weight bandwidth can feed at 62.08 MHz—confirming that memory burst efficiency (`Phase 3.2`) governs throughput.

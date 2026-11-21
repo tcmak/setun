@@ -6,9 +6,9 @@
 
 ## Status & Roadmap
 
-* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` and full-chip `M0` cosimulation next).
+* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; output requantization and full-chip `M0` cosimulation next).
 
-* **Facts Checked:** `2026-11-20`
+* **Facts Checked:** `2026-11-21`
 
 * **Planning & Governance:**
 
@@ -18,7 +18,7 @@
 
   * [`docs/phases.md`](docs/phases.md) — Full task catalogue and acceptance criteria checkboxes.
 
-  * [`docs/decisions.md`](docs/decisions.md) — Architecture Decision Records (`ADR-001` through `ADR-014`).
+  * [`docs/decisions.md`](docs/decisions.md) — Architecture Decision Records (`ADR-001` through `ADR-015`).
 
   * [`docs/open-questions.md`](docs/open-questions.md) — Cross-repo blocker log (`OQ-001` resolved in Task B2).
 
@@ -75,7 +75,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 ## Repository Layout
 
-* **`setun/accelerators/`** — Migen RTL modules (`WeightUnpacker`, `TernaryDot`, `GroupAccumulateScale`, `TernaryRow`, `AccelStub`).
+* **`setun/accelerators/`** — Migen RTL modules (`WeightUnpacker`, `TernaryDot`, `GroupAccumulateScale`, `TernaryRow`, `TernaryTile`, `AccelStub`).
 
 * **`setun/ref/`** — Golden Python/NumPy reference ops (`ops.py`), pack/unpack binary codec (`format.py`), and `M0` decoder (`m0.py`).
 

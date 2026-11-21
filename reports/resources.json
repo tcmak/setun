@@ -16,7 +16,7 @@
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "SYNTHESIZED (R=1)"
+      "basis": "SYNTHESIZED (TernaryRow)"
     },
     {
       "rows": 1,
@@ -31,7 +31,7 @@
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "SYNTHESIZED (R=1)"
+      "basis": "SYNTHESIZED (TernaryRow)"
     },
     {
       "rows": 1,
@@ -46,7 +46,7 @@
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "SYNTHESIZED (R=1)"
+      "basis": "SYNTHESIZED (TernaryRow)"
     },
     {
       "rows": 1,
@@ -61,7 +61,7 @@
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "SYNTHESIZED (R=1)"
+      "basis": "SYNTHESIZED (TernaryRow)"
     },
     {
       "rows": 1,
@@ -76,7 +76,7 @@
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "SYNTHESIZED (R=1)"
+      "basis": "SYNTHESIZED (TernaryRow)"
     },
     {
       "rows": 1,
@@ -91,7 +91,7 @@
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "SYNTHESIZED (R=1)"
+      "basis": "SYNTHESIZED (TernaryRow)"
     },
     {
       "rows": 4,
@@ -99,14 +99,14 @@
       "group_size": 128,
       "act_bits": 8,
       "macs_per_cycle": 256,
-      "luts": 13200,
-      "ffs": 456,
+      "luts": 13745,
+      "ffs": 699,
       "dsps": 0,
-      "luts_per_mac": 51.562,
+      "luts_per_mac": 53.691,
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "[EXTRAPOLATED from R=1]"
+      "basis": "SYNTHESIZED (TernaryTile R=4)"
     },
     {
       "rows": 8,
@@ -114,14 +114,14 @@
       "group_size": 128,
       "act_bits": 8,
       "macs_per_cycle": 512,
-      "luts": 26400,
-      "ffs": 912,
+      "luts": 27316,
+      "ffs": 1342,
       "dsps": 0,
-      "luts_per_mac": 51.562,
+      "luts_per_mac": 53.352,
       "dsps_per_row": 0.0,
       "nodsp": true,
       "vendor": "xc7",
-      "basis": "[EXTRAPOLATED from R=1]"
+      "basis": "SYNTHESIZED (TernaryTile R=8)"
     }
   ],
   "multivendor_ref": [

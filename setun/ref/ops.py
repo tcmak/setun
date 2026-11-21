@@ -129,3 +129,71 @@ def row_dot(
         row_acc += apply_scale(p_g, int(s[g_idx]), shift=0)
 
     return int(round_shift_right(row_acc, shift))
+
+
+def tile_gemv(
+    weights: np.ndarray,
+    activations: np.ndarray,
+    scales: np.ndarray,
+    group_size: int = 128,
+    lanes: int = 64,
+    rows: int = 4,
+    shift: int = 0,
+) -> np.ndarray:
+    """Compute an (N x K) grouped ternary GEMV across R-row stripes (Task 2.4 oracle).
+
+    Supports arbitrary N >= 1 (including N not divisible by rows) and ragged K >= 1
+    (including K not divisible by group_size or lanes) with round-half-up right shift.
+    """
+    if rows < 1:
+        raise ValueError(
+            f"[setun/ref/ops.py:tile_gemv] invalid tile row count: expected rows >= 1, got {rows}."
+        )
+    if lanes < 1 or group_size < lanes or group_size % lanes != 0:
+        raise ValueError(
+            f"[setun/ref/ops.py:tile_gemv] invalid geometry: expected group_size ({group_size}) "
+            f"to be a positive multiple of lanes ({lanes})."
+        )
+    if not (0 <= shift <= 30):
+        raise ValueError(
+            f"[setun/ref/ops.py:tile_gemv] invalid shift: expected shift in [0, 30], got {shift}."
+        )
+
+    w = np.asarray(weights, dtype=np.int64)
+    x = np.asarray(activations, dtype=np.int64)
+    s = np.asarray(scales, dtype=np.int64)
+
+    if w.ndim != 2:
+        raise ValueError(
+            f"[setun/ref/ops.py:tile_gemv] expected 2D weights (N, K), got shape {w.shape}."
+        )
+    n_rows, k_cols = w.shape
+    if n_rows < 1 or k_cols < 1:
+        raise ValueError(
+            f"[setun/ref/ops.py:tile_gemv] expected N >= 1 and K >= 1, "
+            f"got (N={n_rows}, K={k_cols})."
+        )
+    if x.ndim != 1 or x.shape != (k_cols,):
+        raise ValueError(
+            f"[setun/ref/ops.py:tile_gemv] activation shape mismatch: expected ({k_cols},), "
+            f"got {x.shape}."
+        )
+
+    n_groups = (k_cols + group_size - 1) // group_size
+    if s.ndim != 2 or s.shape != (n_rows, n_groups):
+        raise ValueError(
+            f"[setun/ref/ops.py:tile_gemv] scale shape mismatch for N={n_rows}, K={k_cols}, "
+            f"G={group_size}: expected ({n_rows}, {n_groups}), got {s.shape}."
+        )
+
+    out = np.empty(n_rows, dtype=np.int64)
+    for r_idx in range(n_rows):
+        out[r_idx] = row_dot(
+            w[r_idx],
+            x,
+            s[r_idx],
+            group_size=group_size,
+            lanes=lanes,
+            shift=shift,
+        )
+    return out

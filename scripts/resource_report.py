@@ -14,6 +14,7 @@ from pathlib import Path
 from migen.fhdl import verilog
 
 from setun.accelerators.group_scale import TernaryRow
+from setun.accelerators.tile import TernaryTile
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -261,28 +262,115 @@ def _synthesize_single_row(
     return logic, ffs, dsps
 
 
+def _synthesize_tile(
+    rows: int,
+    lanes: int,
+    group_size: int,
+    act_bits: int,
+    nodsp: bool = True,
+    vendor: str = "xc7",
+) -> tuple[int, int, int]:
+    """Run Yosys synthesis on a multi-row TernaryTile and return (logic_cells, ffs, dsps)."""
+    dut = TernaryTile(
+        rows=rows,
+        lanes=lanes,
+        group_size=group_size,
+        act_bits=act_bits,
+        max_k=max(2048, group_size),
+    )
+    mode_suffix = "_nodsp" if nodsp else "_dsp"
+    top_name = f"ternary_tile_{vendor}_R{rows}_L{lanes}_G{group_size}_A{act_bits}{mode_suffix}"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        v_path = tmp / f"{top_name}.v"
+        json_path = tmp / "stat.json"
+
+        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+        v_out.write(str(v_path))
+
+        nodsp_flag = " -nodsp" if nodsp else ""
+        if vendor == "xc7":
+            synth_cmd = f"synth_xilinx -family xc7 -top {top_name} -noiopad{nodsp_flag}"
+        elif vendor == "ecp5":
+            synth_cmd = f"synth_ecp5 -top {top_name}{nodsp_flag}"
+        elif vendor == "cyclonev":
+            synth_cmd = f"synth_intel_alm -family cyclonev -top {top_name}{nodsp_flag}"
+        else:
+            raise ValueError(f"Unsupported synthesis vendor: {vendor}")
+
+        cmd = [
+            "yosys",
+            "-q",
+            "-p",
+            f"read_verilog {v_path}; {synth_cmd}; tee -q -o {json_path} stat -json",
+        ]
+        subprocess.run(cmd, check=True)
+        stat_data = json.loads(json_path.read_text())
+
+    mod_key = f"\\{top_name}"
+    cells: dict[str, int] = stat_data["modules"][mod_key]["num_cells_by_type"]
+
+    if vendor == "xc7":
+        logic = sum(
+            cnt
+            for cell, cnt in cells.items()
+            if cell in {"LUT1", "LUT2", "LUT3", "LUT4", "LUT5", "LUT6"}
+        )
+        ffs = sum(cnt for cell, cnt in cells.items() if cell.startswith("FD"))
+        dsps = sum(cnt for cell, cnt in cells.items() if "DSP" in cell)
+    elif vendor == "ecp5":
+        logic = sum(cnt for cell, cnt in cells.items() if cell.startswith("LUT4"))
+        ffs = sum(cnt for cell, cnt in cells.items() if cell.startswith(("TRELLIS_FF", "FD")))
+        dsps = sum(cnt for cell, cnt in cells.items() if "MULT18" in cell or "ALU" in cell)
+    else:
+        logic = sum(
+            cnt
+            for cell, cnt in cells.items()
+            if any(k in cell for k in ("ALUT", "ALM", "LCELL", "LUT"))
+        )
+        ffs = sum(
+            cnt
+            for cell, cnt in cells.items()
+            if any(k in cell for k in ("MISTRAL_FF", "DFF", "REG")) or cell.startswith("FD")
+        )
+        dsps = sum(
+            cnt
+            for cell, cnt in cells.items()
+            if any(k in cell for k in ("MISTRAL_MUL", "DSP", "MAC"))
+        )
+
+    return logic, ffs, dsps
+
+
 def run_sweep(nodsp: bool = True) -> list[SynthMetrics]:
-    """Synthesize unique (L, G, A) rows on XC7 and compute metrics for all (R, L, G, A)."""
+    """Synthesize (R, L, G, A) rows and multi-row TernaryTile configs directly on XC7."""
     if shutil.which("yosys") is None:
         raise RuntimeError("yosys not found in PATH; run inside configured WSL2 environment.")
 
     row_cache: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    tile_cache: dict[tuple[int, int, int, int], tuple[int, int, int]] = {}
     results: list[SynthMetrics] = []
 
     for rows, lanes, group_size, act_bits in SWEEP_CONFIGS:
-        key = (lanes, group_size, act_bits)
-        if key not in row_cache:
-            row_cache[key] = _synthesize_single_row(
-                lanes, group_size, act_bits, nodsp=nodsp, vendor="xc7"
-            )
-        row_luts, row_ffs, row_dsps = row_cache[key]
+        if rows == 1:
+            key = (lanes, group_size, act_bits)
+            if key not in row_cache:
+                row_cache[key] = _synthesize_single_row(
+                    lanes, group_size, act_bits, nodsp=nodsp, vendor="xc7"
+                )
+            total_luts, total_ffs, total_dsps = row_cache[key]
+            basis = "SYNTHESIZED (TernaryRow)"
+        else:
+            tkey = (rows, lanes, group_size, act_bits)
+            if tkey not in tile_cache:
+                tile_cache[tkey] = _synthesize_tile(
+                    rows, lanes, group_size, act_bits, nodsp=nodsp, vendor="xc7"
+                )
+            total_luts, total_ffs, total_dsps = tile_cache[tkey]
+            basis = f"SYNTHESIZED (TernaryTile R={rows})"
 
-        total_luts = rows * row_luts
-        total_ffs = rows * row_ffs
-        total_dsps = rows * row_dsps
         macs = rows * lanes
-        basis = "SYNTHESIZED (R=1)" if rows == 1 else "[EXTRAPOLATED from R=1]"
-
         results.append(
             SynthMetrics(
                 rows=rows,
@@ -453,8 +541,10 @@ def render_markdown(
             f"route on `LFE5U-85F-6BG381C` measures **{fmax_mhz:.2f} MHz** across the unpipelined "
             "`group_acc + dot_in -> scale_u16 multiply -> row_acc` critical path in "
             "`GroupAccumulateScale` (pipelining for >= 100 MHz board closure scheduled in "
-            "Season 3 Task `6.3`). Multi-row (`R=4`, `R=8`) figures are `[EXTRAPOLATED from R=1]` "
-            "pending `TernaryTile` (`Task 2.4`).",
+            "Season 3 Task `6.3`). Multi-row (`R=4`, `R=8`) XC7 figures are directly "
+            "synthesized from `TernaryTile` "
+            "(`Task 2.4`, including shared activation LUTRAM/BRAM and serialized output mux); "
+            "board capacity counts remain `[EXTRAPOLATED from R=1]` per-vendor row budgets.",
             "- **Memory-bound regime:** Even on the smallest Artix-7 (`XC7A35T`) in 0-DSP mode, "
             "compute fabric fits more MACs/cycle than external DDR3/SPI weight bandwidth can feed "
             f"at {fmax_mhz:.2f} MHz—confirming that memory burst efficiency (`Phase 3.2`) "
