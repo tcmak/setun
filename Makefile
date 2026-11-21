@@ -1,4 +1,4 @@
-.PHONY: doctor doctor-lock lint format test sim-smoke resource-report resource-check ci nightly
+.PHONY: doctor doctor-lock lint format test coverage coverage-full sim-smoke resource-report resource-check ci nightly
 
 PYTHON ?= python3
 
@@ -18,6 +18,12 @@ format:
 
 test:
 	$(PYTHON) -m pytest tests/unit
+
+coverage:
+	$(PYTHON) -m scripts.coverage_report --fast --show-missing
+
+coverage-full:
+	$(PYTHON) -m scripts.coverage_report --show-missing
 
 sim-smoke:
 	@if [ -f targets/sim.py ]; then \
