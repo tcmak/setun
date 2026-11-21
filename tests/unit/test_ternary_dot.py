@@ -136,6 +136,88 @@ def test_ternary_dot_parameter_sweep(lanes: int, act_bits: int, depth: int) -> N
     run_migen_sim(dut, tb)
 
 
+@pytest.mark.parametrize("lanes", [16, 64])
+@pytest.mark.parametrize("pipeline_depth", [0, 1, 2])
+def test_ternary_dot_mid_row_in_valid_bubbles(lanes: int, pipeline_depth: int) -> None:
+    """Task C1.1a: Random 1-cycle/multi-cycle in_valid bubbles and back-to-back bursts vs ops.py."""
+    dut = TernaryDot(lanes=lanes, act_bits=8, pipeline_depth=pipeline_depth)
+    rng = np.random.default_rng(1958 + lanes * 10 + pipeline_depth)
+
+    n_vectors = 128
+    # Mix 0-cycle (back-to-back), 1-cycle, and 2..5-cycle bubbles deterministically
+    gap_choices = np.array([0, 0, 1, 1, 2, 3, 5], dtype=np.int64)
+    gaps = rng.choice(gap_choices, size=n_vectors)
+    gaps[0] = 2
+    gaps[1] = 1
+    gaps[2] = 0
+    gaps[3] = 4
+    gaps[4] = 0
+
+    vectors: list[tuple[int, int, int]] = []
+    for _ in range(n_vectors):
+        trits = rng.choice([-1, 0, 1], size=lanes).astype(np.int8)
+        acts = rng.integers(-128, 128, size=lanes, dtype=np.int8)
+        vectors.append((_pack_trits_signed(trits), _pack_acts(acts, 8), ternary_dot(trits, acts)))
+
+    noise_trits = _pack_trits_codes([0b10 if i % 2 == 0 else 0b11 for i in range(lanes)])
+    noise_acts = _pack_acts(np.full(lanes, -128, dtype=np.int8), 8)
+
+    # Build cycle-accurate input schedule (valid_flag, packed_trits, packed_acts, expected_or_none)
+    schedule: list[tuple[int, int, int, int | None]] = []
+    for v_idx, (p_trits, p_acts, exp_dot) in enumerate(vectors):
+        for _ in range(int(gaps[v_idx])):
+            schedule.append((0, noise_trits, noise_acts, None))
+        schedule.append((1, p_trits, p_acts, exp_dot))
+    for _ in range(pipeline_depth + 3):
+        schedule.append((0, noise_trits, noise_acts, None))
+
+    def tb():
+        if pipeline_depth == 0:
+            for cyc, (v_in, p_trits, p_acts, exp_dot) in enumerate(schedule):
+                yield dut.trits_packed.eq(p_trits)
+                yield dut.acts_packed.eq(p_acts)
+                yield dut.in_valid.eq(v_in)
+                yield
+                got_valid = yield dut.out_valid
+                assert got_valid == v_in, (
+                    f"[test_ternary_dot:TernaryDot] out_valid invariant violated at cycle {cyc} "
+                    f"(L={lanes}, depth=0): expected {v_in}, got {got_valid}"
+                )
+                if v_in == 1:
+                    got_res = yield dut.result
+                    assert got_res == exp_dot, (
+                        f"[test_ternary_dot:TernaryDot] result parity violated at cycle {cyc} "
+                        f"(L={lanes}, depth=0): expected {exp_dot}, got {got_res}"
+                    )
+        else:
+            # In Migen's Simulator.run(), `self.sync` executes before `_process_generators` and
+            # `_commit_and_comb_propagate()` executes after `_process_generators`. Thus an input
+            # queued via `yield sig.eq(...)` at step `t` is captured on rising edge `t + 1` and
+            # visible on synchronous outputs (`pipeline_depth` stages) at step `t + depth + 1`.
+            for cyc, (v_in, p_trits, p_acts, _exp_dot) in enumerate(schedule):
+                if cyc >= pipeline_depth + 1:
+                    src_v, _, _, src_exp = schedule[cyc - pipeline_depth - 1]
+                    got_valid = yield dut.out_valid
+                    assert got_valid == src_v, (
+                        f"[test_ternary_dot:TernaryDot] out_valid invariant violated at cycle "
+                        f"{cyc} (L={lanes}, depth={pipeline_depth}): "
+                        f"expected {src_v}, got {got_valid}"
+                    )
+                    if src_v == 1:
+                        got_res = yield dut.result
+                        assert got_res == src_exp, (
+                            f"[test_ternary_dot:TernaryDot] result parity violated at cycle "
+                            f"{cyc} (L={lanes}, depth={pipeline_depth}): "
+                            f"expected {src_exp}, got {got_res}"
+                        )
+                yield dut.trits_packed.eq(p_trits)
+                yield dut.acts_packed.eq(p_acts)
+                yield dut.in_valid.eq(v_in)
+                yield
+
+    run_migen_sim(dut, tb)
+
+
 @pytest.mark.skipif(shutil.which("yosys") is None, reason="yosys not installed")
 def test_ternary_dot_yosys_zero_dsp_no_multipliers() -> None:
     """Synthesize TernaryDot with Yosys and assert 0 DSPs and 0 multiplier cells."""

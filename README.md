@@ -39,9 +39,15 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 ### 1. Hardware Datapath (`setun/accelerators/` · Migen HDL)
 
 * **Dataflow Pipeline:**
-  `Packed 2-bit Trits` + `int8 Activations` $\longrightarrow$ **`TernaryDot` (**$L$ **lanes, 0 DSPs: LUT mux+add)** $\longrightarrow$ **`GroupAccumulateScale` (**$G$**, 0 DSPs default or `--use-dsp` 1 DSP48E1/row)** $\longrightarrow$ **Wide Row Accumulator (`round-half-up >> shift`)**
+  `Packed 2-bit Trits` + `uint16 Scales` $\longrightarrow$ **`WeightUnpacker` (`valid`/`ready`)** $\longrightarrow$ **`TernaryDot` (**$L$ **lanes, 0 DSPs, `valid`-only stall-free)** $\longrightarrow$ **`GroupAccumulateScale` (**$G$**, `valid`-only stall-free)** $\longrightarrow$ **Wide Row Accumulator (`round-half-up >> shift`)**
 
-* **`TernaryDot` (`setun/accelerators/ternary_dot.py`):** Parametric $L$-lane ($L \in \{16, 32, 64, 128\}$) combinational/pipelined ternary dot-product engine with `valid`/`ready` stream handshaking. Uses **0 DSP slices** across all configurations. Exact bit-growth sizing ($\lceil \log_2(L \cdot 128 + 1) \rceil + 1$ bits; 15-bit signed output for $L=64$) prevents overflow even at the corner case $x = -128, w = -1 \implies +128$.
+* **Streaming Handshake Contracts (`valid`/`ready` vs. `valid`-Only Stall-Free):**
+
+  * **`WeightUnpacker` (`setun/accelerators/unpacker.py`):** Implements full **`valid`/`ready`** stream handshaking on both upstream (`trit_valid`/`trit_ready`, `scale_valid`/`scale_ready`) and downstream (`out_valid`/`out_ready`) interfaces, sustaining 1 beat/cycle with zero group-transition bubbles under downstream backpressure.
+
+  * **`TernaryDot` & `GroupAccumulateScale` / `TernaryRow` (`ternary_dot.py`, `group_scale.py`):** Implement a **`valid`-only stall-free** sink/pipeline contract (`in_valid` / `out_valid`, plus `row_last` end-of-row framing on `GroupAccumulateScale` and `TernaryRow`—no `in_ready` or `out_ready` ports). Both cores accept up to 1 beat/cycle with zero internal stalls and are verified bit-exact under arbitrary 1-cycle and multi-cycle mid-row `in_valid=0` bubbles as well as zero-gap back-to-back rows.
+
+* **`TernaryDot` (`setun/accelerators/ternary_dot.py`):** Parametric $L$-lane ($L \in \{16, 32, 64, 128\}$) combinational/pipelined (`pipeline_depth` $\in \{0, 1, 2\}$) ternary dot-product engine with `valid`-only stall-free streaming (`in_valid` $\to$ `out_valid`). Uses **0 DSP slices** across all configurations. Exact bit-growth sizing ($\lceil \log_2(L \cdot 128 + 1) \rceil + 1$ bits; 15-bit signed output for $L=64$) prevents overflow even at the corner case $x = -128, w = -1 \implies +128$.
 
 * **`GroupAccumulateScale` & `TernaryRow` (`setun/accelerators/group_scale.py`):** Accumulates $G/L$ beats ($G \in \{64, 128, 256\}$) into a 16-bit signed group partial sum $P_g$, multiplies by the group's unsigned 16-bit scale (`scale_u16`), accumulates across groups along a matrix row, and applies a hardware-friendly round-half-up arithmetic right shift (`(acc + (1 << (shift - 1))) >> shift`).
 
@@ -69,7 +75,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 ## Repository Layout
 
-* **`setun/accelerators/`** — Migen RTL modules (`TernaryDot`, `GroupAccumulateScale`, `TernaryRow`, `AccelStub`).
+* **`setun/accelerators/`** — Migen RTL modules (`WeightUnpacker`, `TernaryDot`, `GroupAccumulateScale`, `TernaryRow`, `AccelStub`).
 
 * **`setun/ref/`** — Golden Python/NumPy reference ops (`ops.py`), pack/unpack binary codec (`format.py`), and `M0` decoder (`m0.py`).
 
