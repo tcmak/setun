@@ -34,8 +34,11 @@ include = ["setun*", "targets*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --strict-markers"
 pythonpath = ["."]
+markers = [
+    "slow: subprocess Verilator/cocotb, Yosys/nextpnr synthesis, or large Migen sweep tests",
+]
 
 [tool.ruff]
 line-length = 100

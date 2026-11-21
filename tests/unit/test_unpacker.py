@@ -7,6 +7,7 @@ import random
 
 import cocotb
 import numpy as np
+import pytest
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
@@ -16,7 +17,7 @@ from setun.accelerators.unpacker import (
     decode_5trits_byte_ref,
 )
 from setun.ref.format import pack_ternary_tensor, unpack_trits_1d
-from tests.sim_helper import run_cocotb_verilator
+from tests.sim_helper import run_cocotb_verilator, run_migen_sim
 
 
 @cocotb.test()
@@ -193,6 +194,7 @@ def _run_with_env(
                 os.environ[k] = v
 
 
+@pytest.mark.slow
 def test_unpacker_100k_beats_zero_bubble() -> None:
     """Sustains 1 beat/cycle for 100,000 beats with zero bubbles between groups."""
     dut = WeightUnpacker(beat_bits=256, lanes=64, group_size=128)
@@ -211,6 +213,7 @@ def test_unpacker_100k_beats_zero_bubble() -> None:
     )
 
 
+@pytest.mark.slow
 def test_unpacker_random_backpressure() -> None:
     """Bit-exact unpacking under randomized downstream back-pressure with zero group bubbles."""
     dut = WeightUnpacker(beat_bits=256, lanes=64, group_size=128)
@@ -229,6 +232,7 @@ def test_unpacker_random_backpressure() -> None:
     )
 
 
+@pytest.mark.slow
 def test_decode_5trits_byte_lut() -> None:
     """Verify optional 5-trits-per-byte LUT decoder across all 256 inputs."""
     dut = Decode5TritsByte()
@@ -239,3 +243,134 @@ def test_decode_5trits_byte_lut() -> None:
         toplevel="decode_5trits_byte",
         testcase="tb_decode_5trits_byte_exhaustive",
     )
+
+
+def test_unpacker_constructor_and_5trits_ref_guards() -> None:
+    """Verify WeightUnpacker elaboration guards and decode_5trits_byte_ref range checks."""
+    import pytest
+
+    with pytest.raises(ValueError, match="beat_bits"):
+        WeightUnpacker(beat_bits=64, lanes=64, group_size=128)
+    with pytest.raises(ValueError, match="beat_bits"):
+        WeightUnpacker(beat_bits=192, lanes=64, group_size=128)
+    with pytest.raises(ValueError, match="group_size"):
+        WeightUnpacker(beat_bits=128, lanes=64, group_size=32)
+    with pytest.raises(ValueError, match="group_size"):
+        WeightUnpacker(beat_bits=128, lanes=64, group_size=96)
+    with pytest.raises(ValueError, match="byte_val"):
+        decode_5trits_byte_ref(-1)
+    with pytest.raises(ValueError, match="byte_val"):
+        decode_5trits_byte_ref(256)
+
+
+def test_unpacker_single_slice_and_multi_slice_migen_sim_with_bubbles() -> None:
+    """Cover slices_per_beat==1 & beats_per_group==1 (and >1) under bubbles & backpressure."""
+    for beat_bits, lanes, group_size in [(128, 64, 64), (64, 16, 64)]:
+        dut = WeightUnpacker(beat_bits=beat_bits, lanes=lanes, group_size=group_size)
+        dut._fragment.clock_domains.clear()
+
+        rng = np.random.default_rng(1958 + beat_bits + lanes)
+        n_rows, n_cols = 2, 128
+        weights = rng.choice([-1, 0, 1], size=(n_rows, n_cols)).astype(np.int8)
+        n_groups = n_cols // group_size
+        scales = rng.integers(1, 65535, size=(n_rows, n_groups), dtype=np.uint16)
+
+        packed = pack_ternary_tensor(weights, scales, group_size=group_size, shift=0)
+        flat_bytes = packed.packed_trits.reshape(-1)
+        bytes_per_word = beat_bits // 8
+        total_words = len(flat_bytes) // bytes_per_word
+        words_per_row = total_words // n_rows
+
+        beat_words = [
+            (
+                int.from_bytes(
+                    flat_bytes[w * bytes_per_word : (w + 1) * bytes_per_word].tobytes(), "little"
+                ),
+                1 if ((w + 1) % words_per_row == 0) else 0,
+            )
+            for w in range(total_words)
+        ]
+        flat_scales = [int(s) for s in scales.reshape(-1)]
+
+        beats_per_group = group_size // lanes
+        num_beats = (n_rows * n_cols) // lanes
+        out_bytes = (2 * lanes) // 8
+        expected = [
+            (
+                int.from_bytes(flat_bytes[b * out_bytes : (b + 1) * out_bytes].tobytes(), "little"),
+                flat_scales[b // beats_per_group],
+                1 if ((b + 1) % beats_per_group == 0) else 0,
+                1 if ((b + 1) % (n_cols // lanes) == 0) else 0,
+            )
+            for b in range(num_beats)
+        ]
+
+        def tb(dut=dut, beat_words=beat_words, flat_scales=flat_scales, expected=expected):
+            w_ptr, s_ptr, out_idx, cyc = 0, 0, 0, 0
+            held_t, held_s = False, False
+            while out_idx < len(expected):
+                cyc += 1
+                assert cyc < 500, (
+                    f"[test_unpacker:WeightUnpacker] timeout at cycle {cyc}: "
+                    f"out_idx={out_idx}/{len(expected)}"
+                )
+                drive_t = w_ptr < len(beat_words) and (held_t or (cyc % 3 != 0))
+                drive_s = s_ptr < len(flat_scales) and (held_s or (cyc % 4 != 0))
+                drive_r = 1 if (cyc % 5 != 0) else 0
+
+                if drive_t:
+                    yield dut.trit_data.eq(beat_words[w_ptr][0])
+                    yield dut.trit_last.eq(beat_words[w_ptr][1])
+                    yield dut.trit_valid.eq(1)
+                    held_t = True
+                else:
+                    yield dut.trit_valid.eq(0)
+
+                if drive_s:
+                    yield dut.scale_data.eq(flat_scales[s_ptr])
+                    yield dut.scale_valid.eq(1)
+                    held_s = True
+                else:
+                    yield dut.scale_valid.eq(0)
+
+                yield dut.out_ready.eq(drive_r)
+                yield
+
+                out_v = yield dut.out_valid
+                t_r = yield dut.trit_ready
+                s_r = yield dut.scale_ready
+                if out_v and drive_r:
+                    got = (
+                        (yield dut.trits_packed),
+                        (yield dut.scale_u16),
+                        (yield dut.group_last),
+                        (yield dut.row_last),
+                    )
+                    assert got == expected[out_idx], (
+                        f"[test_unpacker:WeightUnpacker] mismatch at beat {out_idx} (cycle {cyc}): "
+                        f"expected {expected[out_idx]}, got {got}"
+                    )
+                    out_idx += 1
+                if drive_t and t_r:
+                    w_ptr += 1
+                    held_t = False
+                if drive_s and s_r:
+                    s_ptr += 1
+                    held_s = False
+
+        run_migen_sim(dut, tb)
+
+    lut = Decode5TritsByte()
+
+    def lut_tb():
+        for b in (0, 1, 121, 242, 243, 255):
+            yield lut.byte_in.eq(b)
+            yield
+            got = yield lut.trits_out
+            exp = decode_5trits_byte_ref(b)
+            assert got == exp, (
+                f"[test_unpacker:Decode5TritsByte] mismatch for byte {b}: "
+                f"expected {exp:#05x}, got {got:#05x}"
+            )
+
+    run_migen_sim(lut, lut_tb)

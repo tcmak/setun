@@ -7,9 +7,10 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 from litex.soc.integration import export
 
-from setun.accelerators.stub import SETUN_STUB_ID, SETUN_STUB_VERSION
+from setun.accelerators.stub import SETUN_STUB_ID, SETUN_STUB_VERSION, AccelStub
 from targets.sim import SetunSimSoC
 from tests.sim_helper import run_migen_sim
 
@@ -41,6 +42,22 @@ def _build_soc_and_load_csr_json(tmpdir: str) -> tuple[SetunSimSoC, dict[str, in
     return soc, {name: int(meta["addr"]) for name, meta in registers.items()}
 
 
+def test_accel_stub_standalone_counter_and_defaults() -> None:
+    """Fast standalone Migen check of AccelStub ID, VERSION, SCRATCH, and COUNTER."""
+    dut = AccelStub()
+
+    def tb():
+        assert (yield dut.id.status) == SETUN_STUB_ID
+        assert (yield dut.version.status) == SETUN_STUB_VERSION
+        c0 = yield dut.counter.status
+        yield
+        c1 = yield dut.counter.status
+        assert c1 == c0 + 1, f"[test_accel_stub:AccelStub] expected counter {c0 + 1}, got {c1}"
+
+    run_migen_sim(dut, tb)
+
+
+@pytest.mark.slow
 def test_accel_stub_wishbone_bus_and_csr_json() -> None:
     """Verify ID, VERSION, COUNTER, and >= 100 random 32-bit SCRATCH patterns via csr.json."""
     with tempfile.TemporaryDirectory() as tmpdir:

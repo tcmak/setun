@@ -79,6 +79,7 @@ def test_ternary_dot_directed_cases_and_reserved_code() -> None:
     run_migen_sim(dut, tb)
 
 
+@pytest.mark.slow
 def test_ternary_dot_1000_random_vectors_and_latency() -> None:
     """Bit-exact vs ref/ops.py on >= 1000 random vectors and fixed pipeline latency check."""
     lanes = 16
@@ -136,6 +137,7 @@ def test_ternary_dot_parameter_sweep(lanes: int, act_bits: int, depth: int) -> N
     run_migen_sim(dut, tb)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("lanes", [16, 64])
 @pytest.mark.parametrize("pipeline_depth", [0, 1, 2])
 def test_ternary_dot_mid_row_in_valid_bubbles(lanes: int, pipeline_depth: int) -> None:
@@ -218,6 +220,7 @@ def test_ternary_dot_mid_row_in_valid_bubbles(lanes: int, pipeline_depth: int) -
     run_migen_sim(dut, tb)
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("yosys") is None, reason="yosys not installed")
 def test_ternary_dot_yosys_zero_dsp_no_multipliers() -> None:
     """Synthesize TernaryDot with Yosys and assert 0 DSPs and 0 multiplier cells."""
@@ -239,3 +242,20 @@ def test_ternary_dot_yosys_zero_dsp_no_multipliers() -> None:
         cells = stat_data["modules"]["\\ternary_dot"]["num_cells_by_type"]
         bad_cells = [k for k in cells if "mul" in k.lower() or "dsp" in k.lower()]
         assert bad_cells == [], f"Unexpected multiplier/DSP cells found: {bad_cells}"
+
+
+def test_ternary_dot_constructor_guards_and_registered_alias() -> None:
+    """Verify TernaryDot parameter validation and registered=True/False alias."""
+    with pytest.raises(ValueError, match="power of 2"):
+        TernaryDot(lanes=0)
+    with pytest.raises(ValueError, match="power of 2"):
+        TernaryDot(lanes=12)
+    with pytest.raises(ValueError, match="act_bits"):
+        TernaryDot(lanes=16, act_bits=4)
+    with pytest.raises(ValueError, match="pipeline_depth"):
+        TernaryDot(lanes=16, act_bits=8, pipeline_depth=3)
+
+    d_reg = TernaryDot(lanes=16, act_bits=8, registered=True)
+    assert d_reg.pipeline_depth == 1 and d_reg.latency == 1
+    d_comb = TernaryDot(lanes=16, act_bits=8, pipeline_depth=2, registered=False)
+    assert d_comb.pipeline_depth == 0 and d_comb.latency == 0

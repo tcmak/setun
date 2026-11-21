@@ -171,3 +171,97 @@ def test_doctor_enforces_nextpnr_ecp5_pin(
     assert rc == 1
     assert "nextpnr-ecp5" in captured.err
     assert "MISSING" in captured.err
+
+
+def test_doctor_live_environment_and_banner(capsys: pytest.CaptureFixture[str]) -> None:
+    """Run real unmocked probes against the repo toolchain.lock with --banner."""
+    repo_lock = Path(__file__).resolve().parents[2] / "toolchain.lock"
+    rc = doctor.main(["--lockfile", str(repo_lock), "--banner"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "=== Setun Toolchain Versions ===" in out
+    assert "migen" in out
+
+
+def test_doctor_probe_fallbacks_and_cli_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Cover probe missing/fallback branches, --write, missing lockfile, and git mismatch."""
+    # 1. get_cmd_output failure -> None
+    assert doctor.get_cmd_output(["definitely_nonexistent_cmd_1958"]) is None
+
+    # 2. probe_verilator & probe_yosys missing vs non-standard banner fallback
+    monkeypatch.setattr(doctor, "get_cmd_output", lambda _cmd: None)
+    assert doctor.probe_verilator() == "MISSING"
+    assert doctor.probe_yosys() == "MISSING"
+
+    monkeypatch.setattr(doctor, "get_cmd_output", lambda _cmd: "CustomBanner v99\nextra")
+    assert doctor.probe_verilator() == "CustomBanner v99"
+    assert doctor.probe_yosys() == "CustomBanner v99"
+
+    # 3. resolve_nextpnr_ecp5_bin venv fallback & missing
+    fake_venv = tmp_path / "fake_bin"
+    fake_venv.mkdir()
+    fake_py = fake_venv / "python3"
+    fake_py.write_text("", encoding="utf-8")
+    monkeypatch.setattr(doctor.sys, "executable", str(fake_py))
+    monkeypatch.setattr(doctor.shutil, "which", lambda _name: None)
+    assert doctor.resolve_nextpnr_ecp5_bin() is None
+    assert doctor.probe_nextpnr_ecp5() == "MISSING"
+
+    fake_pnr = fake_venv / "nextpnr-ecp5"
+    fake_pnr.write_text("", encoding="utf-8")
+    assert doctor.resolve_nextpnr_ecp5_bin() == str(fake_pnr)
+    monkeypatch.setattr(doctor, "get_cmd_output", lambda _cmd: None)
+    assert doctor.probe_nextpnr_ecp5() == "MISSING"
+    monkeypatch.setattr(doctor, "get_cmd_output", lambda _cmd: "header\ncustom-pnr-build")
+    assert doctor.probe_nextpnr_ecp5() == "custom-pnr-build"
+
+    # 4. probe_pkg_version PackageNotFoundError & probe_git_pkg UNPINNED_GIT_VCS / editable git
+    assert doctor.probe_pkg_version("nonexistent-setun-pkg-1958") == "MISSING"
+    assert doctor.probe_git_pkg("nonexistent_setun_mod_1958") == "MISSING"
+
+    unpinned_dist = MagicMock()
+    unpinned_dist.metadata = {"Name": "custom_vcs_pkg"}
+    unpinned_dist.read_text.return_value = (
+        '{"url": "https://example.com/repo.git", "vcs_info": {"vcs": "git"}}'
+    )
+    monkeypatch.setattr(doctor.importlib.metadata, "distributions", lambda: [unpinned_dist])
+    assert doctor.probe_git_pkg("custom_vcs_pkg") == "UNPINNED_GIT_VCS"
+
+    monkeypatch.setattr(doctor.importlib.metadata, "distributions", lambda: [])
+    fake_spec = MagicMock()
+    fake_spec.origin = str(tmp_path / "ext_pkg" / "__init__.py")
+    monkeypatch.setattr(doctor.importlib.util, "find_spec", lambda _pkg: fake_spec)
+    monkeypatch.setattr(
+        doctor,
+        "get_cmd_output",
+        lambda cmd: str(tmp_path / "ext_pkg") if "--show-toplevel" in cmd else "deadbeef" * 5,
+    )
+    assert doctor.probe_git_pkg("ext_pkg") == "deadbeef" * 5
+
+    # 5. Missing lockfile error
+    rc_missing = doctor.main(["--lockfile", str(tmp_path / "missing.lock")])
+    assert rc_missing == 1
+    assert "Lockfile invariant violated" in capsys.readouterr().err
+
+    # 6. Lockfile missing 'migen' key + git: commit mismatch + --write round-trip
+    no_migen_lock = tmp_path / "no_migen.lock"
+    no_migen_lock.write_text("# comment\npython = 3.12\ngit:litex = 11111111\n", encoding="utf-8")
+    monkeypatch.setattr(
+        doctor,
+        "probe_all",
+        lambda _keys: {"python": "3.12", "git:litex": "22222222", "migen": "0.10.0"},
+    )
+    rc_bad = doctor.main(["--lockfile", str(no_migen_lock)])
+    err_bad = capsys.readouterr().err
+    assert rc_bad == 1
+    assert "check_migen_pin" in err_bad
+    assert "git:litex" in err_bad
+
+    write_target = tmp_path / "written.lock"
+    write_target.write_text("python = 3.12\nmigen = 0.10.0\n", encoding="utf-8")
+    monkeypatch.setattr(doctor, "probe_all", lambda _keys: {"python": "3.12", "migen": "0.10.0"})
+    assert doctor.main(["--lockfile", str(write_target), "--write"]) == 0
+    parsed = doctor.parse_lockfile(write_target)
+    assert parsed == {"python": "3.12", "migen": "0.10.0"}

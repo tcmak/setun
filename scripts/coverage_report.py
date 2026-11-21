@@ -17,16 +17,9 @@ SOURCE_DIRS = ("setun", "targets", "scripts")
 
 FAST_PYTEST_ARGS = [
     "-q",
-    "tests/unit/test_version.py",
-    "tests/unit/test_doctor.py",
-    "tests/unit/test_format.py",
-    "tests/unit/test_ops_ref.py",
-    "tests/unit/test_m0_golden.py",
-    "tests/unit/test_coverage_report.py",
-    "tests/unit/test_tile.py",
-    "tests/unit/test_requantize.py",
-    "-k",
-    "not m1_2048 and not m0_shapes and not short_k_eq_l and not rtl_corners and not end_to_end",
+    "-m",
+    "not slow",
+    "tests/unit",
 ]
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from setun.ref.ops import (
     apply_scale,
@@ -10,6 +11,9 @@ from setun.ref.ops import (
     group_accumulate,
     group_sum_bit_width,
     lane_select_code,
+    requantize_int8,
+    requantize_vec_int8,
+    round_shift_right,
     row_dot,
     ternary_dot,
 )
@@ -92,3 +96,79 @@ def test_ragged_k_padding_invariance() -> None:
         x_pad = np.pad(x, (0, n_groups * g - k))
         res_padded = row_dot(w_pad, x_pad, s, group_size=g, lanes=64, shift=8)
         assert res_ragged == res_padded
+
+
+def test_ops_default_lanes_and_requantize_vec_int8() -> None:
+    """Verify group_accumulate lanes=None default and vectorized requantize_vec_int8 parity."""
+    w = np.array([1, -1, 0, 1, -1, 1, 0, -1], dtype=np.int8)
+    x = np.array([10, 20, 30, 40, -50, 60, -70, 80], dtype=np.int8)
+    assert group_accumulate(w, x) == ternary_dot(w, x)
+
+    vals = np.array([0, 1, -1, 255, -257, -258, (1 << 47) - 1, -(1 << 47)], dtype=np.int64)
+    for sym in (False, True):
+        got_q, got_sat = requantize_vec_int8(vals, 1, 1, symmetric=sym)
+        assert got_q.dtype == np.int8
+        assert got_sat.dtype == bool
+        for idx, v in enumerate(vals.tolist()):
+            exp_q, exp_sat = requantize_int8(int(v), 1, 1, symmetric=sym)
+            assert int(got_q[idx]) == exp_q
+            assert bool(got_sat[idx]) is exp_sat
+
+
+def test_ops_negative_validation_guards() -> None:
+    """Verify input validation guards across lane_select, shift, dot, group, scale, and row_dot."""
+    with pytest.raises(ValueError, match="int8 range"):
+        lane_select_code(0b01, -129)
+    with pytest.raises(ValueError, match="int8 range"):
+        lane_select_code(0b01, 128)
+
+    with pytest.raises(ValueError, match="shift must be >= 0"):
+        round_shift_right(42, -1)
+
+    with pytest.raises(ValueError, match="matching 1D vectors"):
+        ternary_dot(np.zeros((2, 2), dtype=np.int8), np.zeros(4, dtype=np.int8))
+    with pytest.raises(ValueError, match="matching 1D vectors"):
+        ternary_dot(np.zeros(4, dtype=np.int8), np.zeros(5, dtype=np.int8))
+    with pytest.raises(ValueError, match="Trits must be in"):
+        ternary_dot(np.array([2, 0], dtype=np.int8), np.array([1, 1], dtype=np.int8))
+    with pytest.raises(ValueError, match="signed int8"):
+        ternary_dot(np.array([1, -1], dtype=np.int64), np.array([128, 0], dtype=np.int64))
+    with pytest.raises(ValueError, match="signed int8"):
+        ternary_dot(np.array([1, -1], dtype=np.int64), np.array([-129, 0], dtype=np.int64))
+
+    with pytest.raises(ValueError, match="matching 1D group vectors"):
+        group_accumulate(np.zeros((2, 2), dtype=np.int8), np.zeros(4, dtype=np.int8), lanes=2)
+    with pytest.raises(ValueError, match="matching 1D group vectors"):
+        group_accumulate(np.zeros(4, dtype=np.int8), np.zeros(8, dtype=np.int8), lanes=4)
+    with pytest.raises(ValueError, match="divisible by lanes"):
+        group_accumulate(np.zeros(6, dtype=np.int8), np.zeros(6, dtype=np.int8), lanes=4)
+
+    with pytest.raises(ValueError, match="scale_u16"):
+        apply_scale(10, -1)
+    with pytest.raises(ValueError, match="scale_u16"):
+        apply_scale(10, 65536)
+
+    with pytest.raises(ValueError, match="Mismatched row/activation shapes"):
+        row_dot(np.zeros((1, 4), dtype=np.int8), np.zeros(4, dtype=np.int8), np.ones(1))
+    with pytest.raises(ValueError, match="Mismatched row/activation shapes"):
+        row_dot(np.zeros(4, dtype=np.int8), np.zeros(8, dtype=np.int8), np.ones(1))
+    with pytest.raises(ValueError, match="multiple of lanes"):
+        row_dot(np.zeros(64, dtype=np.int8), np.zeros(64, dtype=np.int8), np.ones(1), 64, 24)
+    with pytest.raises(ValueError, match="Expected 1 group scales"):
+        row_dot(np.zeros(64, dtype=np.int8), np.zeros(64, dtype=np.int8), np.ones(2), 64, 16)
+    with pytest.raises(ValueError, match="uint16"):
+        row_dot(
+            np.zeros(64, dtype=np.int8),
+            np.zeros(64, dtype=np.int8),
+            np.array([70000], dtype=np.int64),
+            64,
+            16,
+        )
+    with pytest.raises(ValueError, match="uint16"):
+        row_dot(
+            np.zeros(64, dtype=np.int8),
+            np.zeros(64, dtype=np.int8),
+            np.array([-1], dtype=np.int64),
+            64,
+            16,
+        )

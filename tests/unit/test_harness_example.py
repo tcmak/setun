@@ -37,6 +37,7 @@ def test_migen_native_sim_adder() -> None:
     run_migen_sim(dut, _tb())
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("verilator") is None, reason="verilator not installed")
 def test_cocotb_verilator_adder_passes() -> None:
     dut = _ExampleCombAdder(width=8)
@@ -50,6 +51,7 @@ def test_cocotb_verilator_adder_passes() -> None:
     )
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("verilator") is None, reason="verilator not installed")
 def test_cocotb_verilator_failure_logs_seed_and_keeps_fst() -> None:
     dut = _ExampleCombAdder(width=8)
@@ -72,6 +74,7 @@ def test_cocotb_verilator_failure_logs_seed_and_keeps_fst() -> None:
     shutil.rmtree(fst_path.parent, ignore_errors=True)
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("verilator") is None, reason="verilator not installed")
 def test_cocotb_verilator_fifo_passes() -> None:
     dut = SyncFIFO(width=8, depth=4)

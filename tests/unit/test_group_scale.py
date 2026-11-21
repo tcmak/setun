@@ -32,6 +32,7 @@ def _pack_acts_int8(acts: np.ndarray) -> int:
     return val
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "group_size,lanes",
     [(64, 16), (64, 64), (128, 16), (128, 64), (128, 128), (256, 16), (256, 64), (256, 128)],
@@ -241,6 +242,7 @@ def test_group_accumulate_scale_mid_row_in_valid_bubbles(
     run_migen_sim(dut, tb)
 
 
+@pytest.mark.slow
 def test_ternary_row_mid_row_bubbles_and_back_to_back() -> None:
     """Task C1.1a: Full TernaryRow bit-exact parity under mid-row bubbles and back-to-back rows."""
     k, group_size, lanes, shift = 129, 64, 16, 4
@@ -337,6 +339,7 @@ def test_ternary_row_mid_row_bubbles_and_back_to_back() -> None:
     run_migen_sim(dut, tb)
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("yosys") is None, reason="yosys not installed")
 def test_ternary_row_yosys_exactly_one_multiplier() -> None:
     """Verify TernaryRow synthesizes with exactly 1 multiplier ($mul) per row."""
@@ -358,3 +361,13 @@ def test_ternary_row_yosys_exactly_one_multiplier() -> None:
         cells = stat_data["modules"]["\\ternary_row"]["num_cells_by_type"]
         mul_count = cells.get("$mul", 0)
         assert mul_count == 1, f"Expected exactly 1 $mul per row, got {mul_count} ({cells})"
+
+
+def test_group_accumulate_scale_constructor_guards() -> None:
+    """Verify GroupAccumulateScale rejects invalid geometry and negative shift."""
+    with pytest.raises(ValueError, match="positive multiple of lanes"):
+        GroupAccumulateScale(group_size=32, lanes=64)
+    with pytest.raises(ValueError, match="positive multiple of lanes"):
+        GroupAccumulateScale(group_size=64, lanes=24)
+    with pytest.raises(ValueError, match="shift must be >= 0"):
+        GroupAccumulateScale(group_size=64, lanes=16, shift=-1)

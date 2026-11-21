@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from scripts.make_toy import generate_toy_artifacts
+from scripts.make_toy import main as make_toy_main
 from setun.ref.format import load_ttape_layers, unpack_ternary_tensor
 from setun.ref.m0 import (
     PRESET_CONFIGS,
@@ -21,8 +22,10 @@ from setun.ref.m0 import (
     forward_ternary_chain,
     forward_token,
     generate_greedy,
+    quantize_activation_int8,
     serialize_m0_bundle,
     shannon_entropy,
+    ternary_matvec_integer,
 )
 from setun.ref.ops import row_dot
 
@@ -201,3 +204,61 @@ def test_lux_chain_grouped_mlp_ttape_forward_parity() -> None:
         forward_ternary_chain(layers, x_in[:3])
     with pytest.raises(ValueError, match="m0.forward_ternary_chain.*signed int8"):
         forward_ternary_chain(layers, np.array([200, 0, 0, 0, 0, 0, 0, 0], dtype=np.int64))
+    with pytest.raises(ValueError, match="m0.forward_ternary_chain.*mode"):
+        forward_ternary_chain(layers, x_in, mode="invalid")
+
+
+def test_m0_zero_activations_guards_and_make_toy_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Cover zero-vector quantization (scale==0), validation guards, and make_toy CLI."""
+    # 1. Zero activation vector (Phase 1.4: scale 0 handling)
+    q_zero, scale_zero = quantize_activation_int8(np.zeros(64, dtype=np.float32))
+    assert scale_zero == 0.0
+    assert q_zero.dtype == np.int8
+    assert np.all(q_zero == 0)
+
+    cfg = PRESET_CONFIGS["tiny"]
+    model = build_toy_m0_model(cfg, seed=1958)
+    model.tok_embeddings[0] = 0.0  # forces h=0 -> rms_norm(0)=0 -> _linear_step(act_scale==0)
+    logits_int, hidden_int = forward_token(
+        model, token_id=0, pos=0, kv_cache=KVCache.empty(cfg), mode="integer"
+    )
+    logits_fp, hidden_fp = forward_token(
+        model, token_id=0, pos=0, kv_cache=KVCache.empty(cfg), mode="fp32"
+    )
+    assert np.all(logits_int == 0.0) and np.all(hidden_int == 0.0)
+    assert np.all(logits_fp == 0.0) and np.all(hidden_fp == 0.0)
+
+    # 2. cosine_similarity zero-norm vectors
+    assert cosine_similarity(np.zeros(8), np.zeros(8)) == 1.0
+    assert cosine_similarity(np.zeros(8), np.ones(8)) == 0.0
+
+    # 3. Validation error branches in m0.py
+    with pytest.raises(ValueError, match="divisible by lanes"):
+        ternary_matvec_integer(model.layers[0].q_proj, np.zeros(cfg.d_model, dtype=np.int8), 24)
+    with pytest.raises(ValueError, match="Unsupported execution mode"):
+        forward_token(model, token_id=1, pos=0, kv_cache=KVCache.empty(cfg), mode="bogus")
+    with pytest.raises(ValueError, match="token_id -1 out of range"):
+        forward_token(model, token_id=-1, pos=0, kv_cache=KVCache.empty(cfg))
+    with pytest.raises(ValueError, match="out of range"):
+        forward_token(model, token_id=cfg.vocab_size, pos=0, kv_cache=KVCache.empty(cfg))
+    with pytest.raises(ValueError, match="prompt_tokens must be non-empty"):
+        generate_greedy(model, prompt_tokens=[], max_new_tokens=2)
+    with pytest.raises(ValueError, match="Invalid M0 bundle magic"):
+        deserialize_m0_bundle(b"STM")
+    with pytest.raises(ValueError, match="Invalid M0 bundle magic"):
+        deserialize_m0_bundle(b"BAD!00001234")
+
+    # 4. scripts/make_toy.py invalid size guard and CLI main()
+    with pytest.raises(ValueError, match="size must be one of"):
+        generate_toy_artifacts(tmp_path / "bad", size="invalid_size")
+
+    out_dir = tmp_path / "cli_out"
+    rc = make_toy_main(["--size", "tiny", "--seed", "1958", "--out-dir", str(out_dir)])
+    assert rc == 0
+    cli_out = capsys.readouterr().out
+    assert "[make_toy] Generated m0_tiny.stm0" in cli_out
+    assert (out_dir / "m0_tiny.stm0").exists()
+    assert (out_dir / "m0_tiny_fp32.npz").exists()
+    assert (out_dir / "m0_tiny_manifest.json").exists()

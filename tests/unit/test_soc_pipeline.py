@@ -7,11 +7,12 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 from litex.soc.integration import export
 
 from setun.ref.format import load_ttape_layers, pack_ternary_tensor, serialize_packed_weights
 from setun.ref.m0 import forward_ternary_chain, ternary_matvec_integer
-from setun.soc import TernaryAccel, export_soc_csr_artifacts
+from setun.soc import DEFAULT_CSR_HEADER, DEFAULT_CSR_JSON, TernaryAccel, export_soc_csr_artifacts
 from targets.sim import SetunSimSoC
 from tests.sim_helper import run_migen_sim
 
@@ -307,6 +308,7 @@ def test_soc_csr_artifacts_deterministic_and_synced() -> None:
         assert "CSR_TERNARY_ACCEL_BASE" in h1_txt
 
 
+@pytest.mark.slow
 def test_soc_ttape_lux_chain_and_core_composition_with_bubbles() -> None:
     """Task C1.1c: Stream canonical .ttape fixtures with random bubbles vs setun/ref/m0.py."""
     # 1. Multi-layer TTAPE-grouped Lux.Chain MLP (8 -> 4 -> 2)
@@ -360,6 +362,7 @@ def test_soc_ttape_lux_chain_and_core_composition_with_bubbles() -> None:
     )
 
 
+@pytest.mark.slow
 def test_soc_m0_multi_group_ttape_composition_with_bubbles() -> None:
     """Task C1.1c: Canonical L=64, G=128, beat_bits=256 SoC on multi-group M0 .ttape vs m0.py."""
     rng = np.random.default_rng(19581120)
@@ -393,3 +396,151 @@ def test_soc_m0_multi_group_ttape_composition_with_bubbles() -> None:
         f"[test_soc_pipeline:m0_multi_group] output mismatch vs m0.py: "
         f"expected {expected_m0.tolist()}, got {hw_outs[0].tolist()}"
     )
+
+
+def test_ternary_accel_constructor_and_csr_check_guards(tmp_path: Path) -> None:
+    """Cover TernaryAccel parameter validation and export_soc_csr_artifacts(check=True)."""
+    import pytest
+
+    with pytest.raises(ValueError, match="act_bits == 8"):
+        TernaryAccel(act_bits=16)
+    with pytest.raises(ValueError, match="multiple of 4"):
+        TernaryAccel(lanes=2)
+    with pytest.raises(ValueError, match="multiple of 4"):
+        TernaryAccel(lanes=6)
+    with pytest.raises(ValueError, match="max_k"):
+        TernaryAccel(lanes=16, group_size=64, beat_bits=32, max_k=32)
+    with pytest.raises(ValueError, match="max_k"):
+        TernaryAccel(lanes=16, group_size=64, beat_bits=32, max_k=96)
+    with pytest.raises(ValueError, match="max_rows"):
+        TernaryAccel(max_rows=0)
+
+    # check=True succeeds against synced committed artifacts
+    j_txt, h_txt = export_soc_csr_artifacts(
+        json_path=DEFAULT_CSR_JSON, header_path=DEFAULT_CSR_HEADER, check=True
+    )
+    assert "ternary_accel" in j_txt and "CSR_TERNARY_ACCEL_BASE" in h_txt
+
+    # check=True fails Goose-style on missing or drifted csr.json / csr.h
+    with pytest.raises(RuntimeError, match="deterministic CSR invariant violated"):
+        export_soc_csr_artifacts(
+            json_path=tmp_path / "missing_csr.json", header_path=DEFAULT_CSR_HEADER, check=True
+        )
+
+    bad_h = tmp_path / "drifted_csr.h"
+    bad_h.write_text("// drifted\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="deterministic CSR invariant violated"):
+        export_soc_csr_artifacts(json_path=DEFAULT_CSR_JSON, header_path=bad_h, check=True)
+
+
+def test_soc_result_hi_lo_48bit_sign_extension_and_act_ptr_wrap() -> None:
+    """Verify 48-bit result_hi/result_lo sign extension (>32-bit sums) and act_wr_ptr wrap."""
+    accel = TernaryAccel(lanes=4, group_size=16, beat_bits=16, max_k=16, max_rows=4)
+
+    def tb():
+        # Write starting at total_act_words - 1 (3) so act_wr_ptr wraps 3 -> 0 -> 1 -> 2
+        yield accel.act_word_idx.storage.eq(accel.total_act_words - 1)
+        yield accel.act_word_idx.re.eq(1)
+        yield
+        yield accel.act_word_idx.re.eq(0)
+
+        for _ in range(accel.total_act_words):
+            yield accel.act_word_data.storage.eq(0x80808080)  # four -128 int8 lanes per word
+            yield accel.act_word_data.re.eq(1)
+            yield
+        yield accel.act_word_data.re.eq(0)
+
+        # Pulse clear, enable=1, shift=0, num_rows=2
+        yield accel.ctrl.fields.enable.eq(1)
+        yield accel.ctrl.fields.clear.eq(1)
+        yield accel.cfg.fields.shift.eq(0)
+        yield accel.cfg.fields.num_rows.eq(2)
+        yield
+        yield accel.ctrl.fields.clear.eq(0)
+
+        # 36 groups of G=16 (72 16-bit trit words = 144 beats > max_beats=4 -> tests beat wrap):
+        # Row 0: w = -1 (0b10 -> 0xAAAA), x = -128 -> +2048/group * 65535 * 36 = +4,831,764,480
+        # Row 1: w = +1 (0b01 -> 0x5555), x = -128 -> -2048/group * 65535 * 36 = -4,831,764,480
+        exp_mag = 36 * 2048 * 65535
+        for r_idx, (w_word, exp_48) in enumerate([(0xAAAA, exp_mag), (0x5555, -exp_mag)]):
+            w_sent, s_sent = 0, 0
+            while w_sent < 72 or s_sent < 36:
+                if w_sent < 72:
+                    yield accel.trit_data.eq(w_word)
+                    yield accel.trit_last.eq(1 if w_sent == 71 else 0)
+                    yield accel.trit_valid.eq(1)
+                else:
+                    yield accel.trit_valid.eq(0)
+                if s_sent < 36:
+                    yield accel.scale_data.eq(65535)
+                    yield accel.scale_valid.eq(1)
+                else:
+                    yield accel.scale_valid.eq(0)
+                yield
+                if w_sent < 72 and (yield accel.trit_ready):
+                    w_sent += 1
+                if s_sent < 36 and (yield accel.scale_ready):
+                    s_sent += 1
+
+            yield accel.trit_valid.eq(0)
+            yield accel.trit_last.eq(0)
+            yield accel.scale_valid.eq(0)
+            for _ in range(3):
+                yield
+
+            lo = yield accel.result_lo.status
+            hi = _to_signed_i32((yield accel.result_hi.status))
+            got_full = (hi << 32) | (lo & 0xFFFFFFFF)
+            assert got_full == exp_48, (
+                f"[test_soc_pipeline:result_hi_lo] 48-bit accumulator mismatch on row {r_idx}: "
+                f"expected {exp_48} (hi={exp_48 >> 32}, lo={exp_48 & 0xFFFFFFFF:#x}), "
+                f"got {got_full} (hi={hi}, lo={lo:#x})"
+            )
+
+    run_migen_sim(accel, tb)
+
+
+def test_targets_sim_cli_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify targets/sim.py main() --export-csr-reports and --no-compile-gateware build."""
+    import sys
+
+    import targets.sim as sim_mod
+
+    called_export: list[bool] = []
+    monkeypatch.setattr(sim_mod, "export_soc_csr_artifacts", lambda: called_export.append(True))
+    monkeypatch.setattr(sys, "argv", ["targets.sim", "--export-csr-reports"])
+    sim_mod.main()
+    assert called_export == [True]
+    assert "[sim-csr]" in capsys.readouterr().out
+
+    out_dir = tmp_path / "sim_gateware"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "targets.sim",
+            "--output-dir",
+            str(out_dir),
+            "--with-accel-stub",
+            "--no-ternary-accel",
+            "--no-compile-gateware",
+        ],
+    )
+    sim_mod.main()
+    csr_path = out_dir / "csr.json"
+    assert csr_path.exists()
+    csr_meta = json.loads(csr_path.read_text(encoding="utf-8"))
+    assert "accel_stub_id" in csr_meta["csr_registers"]
+    assert "ternary_accel_ctrl" not in csr_meta["csr_registers"]
+    assert "[sim-smoke]" in capsys.readouterr().out
+
+    soc_wb = SetunSimSoC(
+        expose_host_wb=True,
+        use_external_crg=False,
+        cpu_type=None,
+        integrated_rom_size=0,
+        integrated_main_ram_size=0x1000,
+    )
+    assert hasattr(soc_wb, "host_wb") and not hasattr(soc_wb, "crg")

@@ -26,6 +26,7 @@ def _base_seed() -> int:
     return int(os.environ.get("TEST_SEED", os.environ.get("RANDOM_SEED", "1958")))
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("verilator") is None, reason="verilator not installed")
 @pytest.mark.parametrize("lanes", DOT_LANES)
 def test_regression_sweep_ternary_dot(lanes: int) -> None:
@@ -47,6 +48,7 @@ def test_regression_sweep_ternary_dot(lanes: int) -> None:
         )
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("verilator") is None, reason="verilator not installed")
 @pytest.mark.parametrize("k,group_size,lanes,shift", ROW_CFGS)
 def test_regression_sweep_group_accumulate_scale(

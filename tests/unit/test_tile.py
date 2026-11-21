@@ -14,7 +14,7 @@ from cocotb.triggers import RisingEdge
 
 from setun.ref.format import pack_trits_1d
 from setun.ref.ops import row_dot, tile_gemv
-from tests.sim_helper import run_cocotb_verilator
+from tests.sim_helper import run_cocotb_verilator, run_migen_sim
 
 
 def _pack_acts_slice_le(acts_slice: np.ndarray) -> int:
@@ -147,6 +147,99 @@ def test_ternary_tile_constructor_negative_guards() -> None:
         TernaryTile(rows=4, lanes=16, group_size=64, max_k=32)
     with pytest.raises(ValueError, match="TernaryTile"):
         TernaryTile(rows=4, lanes=16, group_size=64, max_k=72)
+
+
+def test_ternary_tile_migen_sim_bubbles_and_backpressure() -> None:
+    """Fast in-process Migen simulation of TernaryTile covering bubbles, stalls, and ragged N."""
+    from setun.accelerators.tile import TernaryTile
+
+    rows, lanes, group_size, max_k = 2, 4, 8, 16
+    dut = TernaryTile(
+        rows=rows, lanes=lanes, group_size=group_size, act_bits=8, acc_bits=48, max_k=max_k
+    )
+    dut._fragment.clock_domains.clear()
+
+    rng = np.random.default_rng(195824)
+    n_rows, k_cols, shift = 3, 16, 4
+    n_groups = k_cols // group_size
+    w = rng.choice([-1, 0, 1], size=(n_rows, k_cols)).astype(np.int8)
+    x = rng.integers(-128, 128, size=(k_cols,), dtype=np.int8)
+    s = rng.integers(1, 2048, size=(n_rows, n_groups), dtype=np.uint16)
+    golden = tile_gemv(w, x, s, group_size=group_size, lanes=lanes, rows=rows, shift=shift)
+    act_slices, stream_beats = _prepare_tile_stripes(
+        w, x, s, rows=rows, lanes=lanes, group_size=group_size
+    )
+
+    def tb():
+        # 1. Verify num_rows == 0 guard in Migen simulation
+        yield dut.num_rows.eq(0)
+        yield dut.sink.valid.eq(1)
+        yield dut.sink.last.eq(1)
+        yield dut.source.ready.eq(1)
+        yield
+        assert (yield dut.sink.ready) == 0 and (yield dut.source.valid) == 0, (
+            "[test_tile:TernaryTile] num_rows==0 guard violated at cycle 0"
+        )
+
+        # 2. Clear and load activation memory
+        yield dut.clear.eq(1)
+        yield dut.sink.valid.eq(0)
+        yield
+        yield dut.clear.eq(0)
+        yield dut.num_rows.eq(n_rows)
+        yield dut.shift.eq(shift)
+        for addr_i, slice_val in enumerate(act_slices):
+            yield dut.act_wr_addr.eq(addr_i)
+            yield dut.act_wr_data.eq(slice_val)
+            yield dut.act_wr_en.eq(1)
+            yield
+        yield dut.act_wr_en.eq(0)
+        yield
+
+        # 3. Stream beats with forced 1-cycle & multi-cycle bubbles and source backpressure
+        in_ptr = 0
+        held = False
+        got: list[tuple[int, int, int]] = []
+        for cyc in range(1, 200):
+            if len(got) == n_rows:
+                break
+            drive_v = in_ptr < len(stream_beats) and (held or (cyc % 4 not in (0, 1)))
+            drive_r = 1 if (cyc % 3 != 0) else 0
+            if drive_v:
+                t_w, s_w, l_f = stream_beats[in_ptr]
+                yield dut.sink.trits.eq(t_w)
+                yield dut.sink.scales.eq(s_w)
+                yield dut.sink.last.eq(l_f)
+                yield dut.sink.valid.eq(1)
+                held = True
+            else:
+                yield dut.sink.valid.eq(0)
+            yield dut.source.ready.eq(drive_r)
+            yield
+
+            if drive_v and (yield dut.sink.ready):
+                in_ptr += 1
+                held = False
+            if (yield dut.source.valid) and drive_r:
+                got.append(
+                    (
+                        (yield dut.source.row_idx),
+                        _to_signed((yield dut.source.result), 48),
+                        (yield dut.source.last),
+                    )
+                )
+
+        assert len(got) == n_rows, (
+            f"[test_tile:TernaryTile] expected {n_rows} output rows, got {len(got)}"
+        )
+        for idx, (g_idx, g_val, g_last) in enumerate(got):
+            exp_last = 1 if idx == n_rows - 1 else 0
+            assert (g_idx, g_val, g_last) == (idx, int(golden[idx]), exp_last), (
+                f"[test_tile:TernaryTile] row {idx} mismatch: "
+                f"expected ({idx}, {int(golden[idx])}, {exp_last}), got {(g_idx, g_val, g_last)}"
+            )
+
+    run_migen_sim(dut, tb)
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +641,7 @@ def _run_tile_verilator(
                 os.environ[k] = v
 
 
+@pytest.mark.slow
 def test_ternary_tile_short_k_eq_l_and_ragged_matrix() -> None:
     """Verify K == L backpressure stalls, ragged N/K, bubbles, and num_rows == 0 guard."""
     _run_tile_verilator(
@@ -560,6 +654,7 @@ def test_ternary_tile_short_k_eq_l_and_ragged_matrix() -> None:
     )
 
 
+@pytest.mark.slow
 def test_ternary_tile_m0_shapes_and_ragged_tails() -> None:
     """Verify M0 shapes (G=64, L=16, R=4) with random bubbles, backpressure, and ragged N."""
     _run_tile_verilator(
@@ -572,6 +667,7 @@ def test_ternary_tile_m0_shapes_and_ragged_tails() -> None:
     )
 
 
+@pytest.mark.slow
 def test_ternary_tile_m1_2048x2048_and_utilization() -> None:
     """Verify M1 (N=2048, K=2048, R=4, L=64, G=128) bit-exactness and >= 95% utilization."""
     _run_tile_verilator(

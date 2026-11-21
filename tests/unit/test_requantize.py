@@ -12,7 +12,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
 from setun.ref.ops import requantize_int8, requantize_vec_int8, tile_gemv
-from tests.sim_helper import run_cocotb_verilator
+from tests.sim_helper import run_cocotb_verilator, run_migen_sim
 from tests.unit.test_tile import _prepare_tile_stripes
 
 
@@ -96,6 +96,74 @@ def test_requantize_constructor_negative_guards() -> None:
         Requantize(in_bits=48, out_bits=1)
     with pytest.raises(ValueError, match="Requantize"):
         Requantize(in_bits=8, out_bits=16)
+
+
+def test_requantize_migen_sim_bubbles_and_backpressure() -> None:
+    """Fast in-process Migen simulation of Requantize covering corners, bubbles, and stalls."""
+    from setun.accelerators.requantize import Requantize
+
+    dut = Requantize(in_bits=48, out_bits=8)
+    dut._fragment.clock_domains.clear()
+
+    vec = [0, 127, 128, -128, -129, 255, -257, (1 << 47) - 1, -(1 << 47)]
+
+    def tb():
+        for scale_u16, shift, sym in [(1, 0, 0), (1, 1, 1), (65535, 62, 0)]:
+            yield dut.clear.eq(1)
+            yield dut.sink.valid.eq(0)
+            yield dut.source.ready.eq(0)
+            yield
+            yield dut.clear.eq(0)
+            yield dut.scale_u16.eq(scale_u16)
+            yield dut.shift.eq(shift)
+            yield dut.symmetric.eq(sym)
+            yield
+
+            in_ptr = 0
+            held = False
+            got: list[tuple[int, int, int, int]] = []
+            for cyc in range(1, 160):
+                if len(got) == len(vec):
+                    break
+                drive_v = in_ptr < len(vec) and (held or (cyc % 4 not in (0, 1)))
+                drive_r = 1 if (cyc % 3 != 0) else 0
+                if drive_v:
+                    yield dut.sink.result.eq(_to_unsigned(vec[in_ptr], 48))
+                    yield dut.sink.row_idx.eq(in_ptr)
+                    yield dut.sink.last.eq(1 if in_ptr == len(vec) - 1 else 0)
+                    yield dut.sink.valid.eq(1)
+                    held = True
+                else:
+                    yield dut.sink.valid.eq(0)
+                yield dut.source.ready.eq(drive_r)
+                yield
+
+                if drive_v and (yield dut.sink.ready):
+                    in_ptr += 1
+                    held = False
+                if (yield dut.source.valid) and drive_r:
+                    got.append(
+                        (
+                            (yield dut.source.row_idx),
+                            _to_signed((yield dut.source.result), 8),
+                            (yield dut.source.saturated),
+                            (yield dut.source.last),
+                        )
+                    )
+
+            assert len(got) == len(vec), (
+                f"[test_requantize:Requantize] expected {len(vec)} outputs, got {len(got)}"
+            )
+            for idx, (g_idx, g_q, g_sat, g_last) in enumerate(got):
+                exp_q, exp_sat_b = requantize_int8(vec[idx], scale_u16, shift, symmetric=bool(sym))
+                exp_tup = (idx, exp_q, int(exp_sat_b), 1 if idx == len(vec) - 1 else 0)
+                assert (g_idx, g_q, g_sat, g_last) == exp_tup, (
+                    f"[test_requantize:Requantize] mismatch at item {idx} "
+                    f"(scale={scale_u16}, shift={shift}, sym={sym}): "
+                    f"expected {exp_tup}, got {(g_idx, g_q, g_sat, g_last)}"
+                )
+
+    run_migen_sim(dut, tb)
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +680,7 @@ def _build_tile_req_composition_wrapper(rows: int = 4, lanes: int = 16, group_si
     return _TileReqTop()
 
 
+@pytest.mark.slow
 def test_requantize_rtl_corners_ii1_and_backpressure() -> None:
     """Verify Requantize RTL across ±2^47/shift/scale corners, II=1, and random stalls."""
     dut = _build_requantize_sim_wrapper()
@@ -624,6 +693,7 @@ def test_requantize_rtl_corners_ii1_and_backpressure() -> None:
     )
 
 
+@pytest.mark.slow
 def test_tile_to_requantize_end_to_end() -> None:
     """Verify TernaryTile -> Requantize composition via stream.Endpoint.connect()."""
     dut = _build_tile_req_composition_wrapper(rows=4, lanes=16, group_size=64)
