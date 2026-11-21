@@ -117,8 +117,36 @@ def test_tile_gemv_ref_parity_and_validation() -> None:
         )
         np.testing.assert_array_equal(got, expected)
 
-    with pytest.raises(ValueError, match="tile_gemv"):
-        tile_gemv(np.zeros((4, 64), dtype=np.int8), np.zeros(64, dtype=np.int8), np.zeros((4, 2)))
+    w_ok = np.zeros((4, 64), dtype=np.int8)
+    x_ok = np.zeros(64, dtype=np.int8)
+    s_ok = np.zeros((4, 1), dtype=np.uint16)
+
+    for bad_kwargs in [
+        {"weights": w_ok, "activations": x_ok, "scales": np.zeros((4, 2), dtype=np.uint16)},
+        {"weights": w_ok, "activations": x_ok, "scales": s_ok, "rows": 0},
+        {"weights": w_ok, "activations": x_ok, "scales": s_ok, "group_size": 64, "lanes": 24},
+        {"weights": w_ok, "activations": x_ok, "scales": s_ok, "shift": -1},
+        {"weights": w_ok, "activations": x_ok, "scales": s_ok, "shift": 31},
+        {"weights": np.zeros(64, dtype=np.int8), "activations": x_ok, "scales": s_ok},
+        {"weights": np.zeros((0, 64), dtype=np.int8), "activations": x_ok, "scales": s_ok},
+        {"weights": w_ok, "activations": np.zeros(32, dtype=np.int8), "scales": s_ok},
+    ]:
+        with pytest.raises(ValueError, match="tile_gemv"):
+            tile_gemv(**bad_kwargs)
+
+
+def test_ternary_tile_constructor_negative_guards() -> None:
+    """Verify TernaryTile rejects invalid rows, lanes/group_size, and max_k at elaboration."""
+    from setun.accelerators.tile import TernaryTile
+
+    with pytest.raises(ValueError, match="TernaryTile"):
+        TernaryTile(rows=0, lanes=16, group_size=64, max_k=128)
+    with pytest.raises(ValueError, match="TernaryTile"):
+        TernaryTile(rows=4, lanes=24, group_size=64, max_k=128)
+    with pytest.raises(ValueError, match="TernaryTile"):
+        TernaryTile(rows=4, lanes=16, group_size=64, max_k=32)
+    with pytest.raises(ValueError, match="TernaryTile"):
+        TernaryTile(rows=4, lanes=16, group_size=64, max_k=72)
 
 
 # ---------------------------------------------------------------------------

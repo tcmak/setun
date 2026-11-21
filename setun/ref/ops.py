@@ -197,3 +197,77 @@ def tile_gemv(
             shift=shift,
         )
     return out
+
+
+def requantize_int8(
+    val: int,
+    scale_u16: int,
+    shift: int,
+    *,
+    symmetric: bool = False,
+    in_bits: int = 48,
+) -> tuple[int, bool]:
+    """Scale, round-half-up shift (65-bit safe), and saturate a signed accumulator to int8.
+
+    Returns `(q_int8, saturated)` matching `docs/NUMERICS.md` §4 bit-for-bit.
+    """
+    v = int(val)
+    min_in = -(1 << (in_bits - 1))
+    max_in = (1 << (in_bits - 1)) - 1
+    if not (min_in <= v <= max_in):
+        raise ValueError(
+            f"[setun/ref/ops.py:requantize_int8] input out of signed {in_bits}-bit range "
+            f"[{min_in}, {max_in}]: got {v}."
+        )
+    s_u16 = int(scale_u16)
+    if not (0 <= s_u16 <= 0xFFFF):
+        raise ValueError(
+            f"[setun/ref/ops.py:requantize_int8] scale_u16 out of uint16 range [0, 65535]: "
+            f"got {s_u16}."
+        )
+    sh = int(shift)
+    if not (0 <= sh <= 62):
+        raise ValueError(
+            f"[setun/ref/ops.py:requantize_int8] shift out of range [0, 62]: got {sh}."
+        )
+
+    # Exact Python big-int product + 65-bit safe round-half-up shift
+    prod = v * s_u16
+    shifted = prod if sh == 0 else (prod + (1 << (sh - 1))) >> sh
+
+    q_min = -127 if symmetric else -128
+    q_max = 127
+    if shifted < q_min:
+        return q_min, True
+    if shifted > q_max:
+        return q_max, True
+    return int(shifted), False
+
+
+def requantize_vec_int8(
+    vals: np.ndarray,
+    scale_u16: int,
+    shift: int,
+    *,
+    symmetric: bool = False,
+    in_bits: int = 48,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Vectorized wrapper around `requantize_int8` returning `(int8_arr, sat_bool_arr)`."""
+    arr = np.asarray(vals)
+    if arr.ndim != 1:
+        raise ValueError(
+            f"[setun/ref/ops.py:requantize_vec_int8] expected 1D array, got shape {arr.shape}."
+        )
+    out_q = np.empty(arr.shape[0], dtype=np.int8)
+    out_sat = np.empty(arr.shape[0], dtype=bool)
+    for idx, item in enumerate(arr.tolist()):
+        q, sat = requantize_int8(
+            int(item),
+            scale_u16,
+            shift,
+            symmetric=symmetric,
+            in_bits=in_bits,
+        )
+        out_q[idx] = q
+        out_sat[idx] = sat
+    return out_q, out_sat

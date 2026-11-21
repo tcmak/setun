@@ -14,6 +14,7 @@ from pathlib import Path
 from migen.fhdl import verilog
 
 from setun.accelerators.group_scale import TernaryRow
+from setun.accelerators.requantize import Requantize
 from setun.accelerators.tile import TernaryTile
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +99,20 @@ class VendorRowMetrics:
     dsps: int
     cells_per_mac: float
     fmax_mhz: float | None = None
+
+
+@dataclass
+class RequantizeStageMetrics:
+    in_bits: int
+    out_bits: int
+    nodsp: bool
+    xc7_lut6: int
+    xc7_ffs: int
+    xc7_dsps: int
+    ecp5_lut4: int
+    ecp5_ffs: int
+    ecp5_dsps: int
+    ecp5_fmax_mhz: float
 
 
 def _resolve_nextpnr_ecp5() -> str:
@@ -428,10 +443,141 @@ def run_multivendor_reference(nodsp: bool = True) -> list[VendorRowMetrics]:
     return out
 
 
+def run_requantize_characterization(
+    in_bits: int = 48,
+    out_bits: int = 8,
+    nodsp: bool = True,
+    speed: int = 6,
+) -> RequantizeStageMetrics:
+    """Synthesize Requantize on XC7 + ECP5 and measure real nextpnr-ecp5 Fmax (Task 2.5)."""
+    if shutil.which("yosys") is None:
+        raise RuntimeError(
+            "[scripts/resource_report.py:run_requantize_characterization] yosys not found in PATH."
+        )
+    nextpnr_bin = _resolve_nextpnr_ecp5()
+    dut = Requantize(in_bits=in_bits, out_bits=out_bits)
+    mode_suffix = "_nodsp" if nodsp else "_dsp"
+    top_name = f"requantize_I{in_bits}_O{out_bits}{mode_suffix}"
+    nodsp_flag = " -nodsp" if nodsp else ""
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        v_path = tmp / f"{top_name}.v"
+        xc7_stat_json = tmp / "xc7_stat.json"
+        ecp5_net_json = tmp / "ecp5_netlist.json"
+        ecp5_stat_json = tmp / "ecp5_stat.json"
+        pnr_json = tmp / "ecp5_pnr.json"
+
+        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+        v_out.write(str(v_path))
+
+        # 1. Xilinx XC7 synthesis
+        subprocess.run(
+            [
+                "yosys",
+                "-q",
+                "-p",
+                f"read_verilog {v_path}; "
+                f"synth_xilinx -family xc7 -top {top_name} -noiopad{nodsp_flag}; "
+                f"tee -q -o {xc7_stat_json} stat -json",
+            ],
+            check=True,
+        )
+        xc7_cells: dict[str, int] = json.loads(xc7_stat_json.read_text(encoding="utf-8"))[
+            "modules"
+        ][f"\\{top_name}"]["num_cells_by_type"]
+        xc7_lut6 = sum(
+            cnt
+            for cell, cnt in xc7_cells.items()
+            if cell in {"LUT1", "LUT2", "LUT3", "LUT4", "LUT5", "LUT6"}
+        )
+        xc7_ffs = sum(cnt for cell, cnt in xc7_cells.items() if cell.startswith("FD"))
+        xc7_dsps = sum(cnt for cell, cnt in xc7_cells.items() if "DSP" in cell)
+
+        # 2. Lattice ECP5 synthesis + nextpnr-ecp5 out-of-context place-and-route
+        subprocess.run(
+            [
+                "yosys",
+                "-q",
+                "-p",
+                f"read_verilog {v_path}; "
+                f"synth_ecp5 -top {top_name}{nodsp_flag} -json {ecp5_net_json}; "
+                f"tee -q -o {ecp5_stat_json} stat -json",
+            ],
+            check=True,
+        )
+        ecp5_cells: dict[str, int] = json.loads(ecp5_stat_json.read_text(encoding="utf-8"))[
+            "modules"
+        ][f"\\{top_name}"]["num_cells_by_type"]
+        ecp5_lut4 = sum(cnt for cell, cnt in ecp5_cells.items() if cell.startswith("LUT4"))
+        ecp5_ffs = sum(
+            cnt for cell, cnt in ecp5_cells.items() if cell.startswith(("TRELLIS_FF", "FD"))
+        )
+        ecp5_dsps = sum(
+            cnt for cell, cnt in ecp5_cells.items() if "MULT18" in cell or "ALU" in cell
+        )
+
+        subprocess.run(
+            [
+                nextpnr_bin,
+                "--85k",
+                "--package",
+                "CABGA381",
+                "--speed",
+                str(speed),
+                "--seed",
+                "1",
+                "--freq",
+                "100",
+                "--timing-allow-fail",
+                "--out-of-context",
+                "--json",
+                "ecp5_netlist.json",
+                "--report",
+                "ecp5_pnr.json",
+            ],
+            cwd=str(tmp),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        pnr_rep = json.loads(pnr_json.read_text(encoding="utf-8"))
+
+    if nodsp and (xc7_dsps != 0 or ecp5_dsps != 0):
+        raise RuntimeError(
+            f"[scripts/resource_report.py:run_requantize_characterization] 0-DSP invariant "
+            f"violated in -nodsp mode: expected xc7_dsps=0 and ecp5_dsps=0, got "
+            f"xc7_dsps={xc7_dsps}, ecp5_dsps={ecp5_dsps}."
+        )
+
+    fmax_map = pnr_rep.get("fmax", {})
+    clk_entry = fmax_map.get("sys_clk") or next(iter(fmax_map.values()))
+    ecp5_fmax_mhz = round(float(clk_entry["achieved"]), 2)
+    if ecp5_fmax_mhz <= 0.0:
+        raise RuntimeError(
+            f"[scripts/resource_report.py:run_requantize_characterization] invalid measured "
+            f"ecp5_fmax_mhz for {top_name}: {ecp5_fmax_mhz}."
+        )
+
+    return RequantizeStageMetrics(
+        in_bits=in_bits,
+        out_bits=out_bits,
+        nodsp=nodsp,
+        xc7_lut6=xc7_lut6,
+        xc7_ffs=xc7_ffs,
+        xc7_dsps=xc7_dsps,
+        ecp5_lut4=ecp5_lut4,
+        ecp5_ffs=ecp5_ffs,
+        ecp5_dsps=ecp5_dsps,
+        ecp5_fmax_mhz=ecp5_fmax_mhz,
+    )
+
+
 def render_markdown(
     metrics: list[SynthMetrics],
     vendor_rows: list[VendorRowMetrics],
     nodsp: bool = True,
+    requantize_stage: RequantizeStageMetrics | None = None,
 ) -> str:
     """Format multi-vendor sweep, board capacity, and bandwidth analysis as Markdown."""
     title_suffix = " (0-DSP Default / -nodsp)" if nodsp else " (Opt-In 1 DSP/row Mode)"
@@ -551,6 +697,26 @@ def render_markdown(
             "governs throughput.",
         ]
     )
+    if requantize_stage is not None:
+        lines.extend(
+            [
+                "",
+                "## 4. Output Requantization Stage (`Requantize` 48-bit -> `int8`, Task 2.5)",
+                "",
+                "Shared 1-row/cycle 2-stage pipelined requantizer (`II = 1`, 1 instance per "
+                "`TernaryTile` behind the serialized output mux):",
+                "",
+                "| Width (`in -> out`) | XC7 LUT6 | XC7 FFs | XC7 DSP48E1 | ECP5 LUT4 | ECP5 FFs "
+                "| ECP5 MULT18 | Measured ECP5 Fmax |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|",
+                f"| `{requantize_stage.in_bits}b -> {requantize_stage.out_bits}b` | "
+                f"{requantize_stage.xc7_lut6} | {requantize_stage.xc7_ffs} | "
+                f"{requantize_stage.xc7_dsps} | {requantize_stage.ecp5_lut4} | "
+                f"{requantize_stage.ecp5_ffs} | {requantize_stage.ecp5_dsps} | "
+                f"{requantize_stage.ecp5_fmax_mhz:.2f} MHz |",
+            ]
+        )
+
     return "\n".join(lines) + "\n"
 
 
@@ -620,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     metrics = run_sweep(nodsp=nodsp)
     vendor_rows = run_multivendor_reference(nodsp=nodsp)
+    req_stage = run_requantize_characterization(nodsp=nodsp)
     ecp5_row = next(vr for vr in vendor_rows if vr.vendor == "ecp5")
     nodsp_flag = " -nodsp" if nodsp else ""
     payload = {
@@ -628,10 +795,11 @@ def main(argv: list[str] | None = None) -> int:
         "measured_ecp5_fmax_mhz": ecp5_row.fmax_mhz,
         "configs": [asdict(m) for m in metrics],
         "multivendor_ref": [asdict(vr) for vr in vendor_rows],
+        "requantize_stage": asdict(req_stage),
     }
 
     json_text = json.dumps(payload, indent=2) + "\n"
-    md_text = render_markdown(metrics, vendor_rows, nodsp=nodsp)
+    md_text = render_markdown(metrics, vendor_rows, nodsp=nodsp, requantize_stage=req_stage)
 
     if args.check:
         check_baseline(metrics, DEFAULT_BASELINE)

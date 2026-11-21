@@ -6,7 +6,7 @@
 
 ## Status & Roadmap
 
-* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; output requantization and full-chip `M0` cosimulation next).
+* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; 2-stage `int8` `Requantize` online; tile nightly sweep and full-chip `M0` cosimulation next).
 
 * **Facts Checked:** `2026-11-21`
 
@@ -75,7 +75,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 ## Repository Layout
 
-* **`setun/accelerators/`** — Migen RTL modules (`WeightUnpacker`, `TernaryDot`, `GroupAccumulateScale`, `TernaryRow`, `TernaryTile`, `AccelStub`).
+* **`setun/accelerators/`** — Migen RTL modules (`WeightUnpacker`, `TernaryDot`, `GroupAccumulateScale`, `TernaryRow`, `TernaryTile`, `Requantize`, `AccelStub`).
 
 * **`setun/ref/`** — Golden Python/NumPy reference ops (`ops.py`), pack/unpack binary codec (`format.py`), and `M0` decoder (`m0.py`).
 

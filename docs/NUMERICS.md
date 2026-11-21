@@ -101,6 +101,36 @@ Scale Multiply (scale_u16 = 300, shift = 4):
 Unshifted product: $m_0 = -138 \times 300 = -41400$
 Round-half-up shift (shift = 4, rounding bias $= 1 \ll 3 = 8$): $$(-41400 + 8) \gg 4 = -41392 \gg 4 = -2587$$
 
+## 4. Output Requantization & `int8` Saturation (Task 2.5)
+
+Given a signed 48-bit row result $r \in [-2^{47}, 2^{47}-1]$ emitted by `TernaryRow` or
+`TernaryTile.source`, an unsigned 16-bit requantization multiplier $m \in [0, 65535]$, a
+right-shift exponent $s \in [0, 62]$, and a 1-bit symmetry selector $	ext{sym} \in \{0, 1\}$:
+
+1. **Zero-extended unsigned scale multiply (65-bit signed safe):**
+   Cast $m$ to a 17-bit positive signed integer ($[0, 65535]$) and compute the exact product:
+   $$p = r \cdot m \in [-2^{47}(2^{16}-1), (2^{47}-1)(2^{16}-1)] \subset (-2^{63}, +2^{63})$$
+
+2. **65-bit signed round-half-up shift (`shift == 0` bias bypass):**
+   Evaluate the rounding bias addition in **65-bit signed** arithmetic ($[-2^{64}, 2^{64}-1]$) so
+   $p + 2^{s-1} < 2^{63} + 2^{61} < 2^{64}-1$ can never sign-overflow even at $r = +2^{47}-1$,
+   $m = 65535$, $s = 62$:
+   $$u = egin{cases} p & 	ext{if } s = 0 \ (p + (1 \ll (s - 1))) \gg s & 	ext{if } 1 \le s \le 62 \end{cases}$$
+   *(Notice half-way ties $k + 0.5$ always round toward $+\infty$: $+0.5 	o +1$, $-0.5 	o 0$,
+   $-1.5 	o -1$, matching `round_shift_right` in §2.4.)*
+
+3. **Signed `int8` saturation & telemetry flag:**
+   Define the lower clamp bound $q_{\min} = -127$ if $	ext{sym} = 1$, else $-128$ (`ADR-002`
+   default), and upper bound $q_{\max} = +127$:
+   $$y = \min(\max(u, q_{\min}), +127) \in 	ext{int8}$$
+   $$	ext{saturated} = \mathbb{I}[u < q_{\min} \;\lor\; u > +127] \in \{0, 1\}$$
+
+4. **Hardware Pipeline (`II = 1`):**
+   `setun/accelerators/requantize.py` (`Requantize`) registers the boundary between Stage 1
+   ($48 	imes 16$ LUT multiply in default `-nodsp` mode) and Stage 2 (65-bit bias + shift +
+   clamp) using a 2-stage valid/ready skid-safe pipeline, sustaining 1 row/cycle (`II = 1`) behind
+   `TernaryTile`'s serialized output mux (`1` shared requantizer per $R$-row tile, `0` DSPs).
+
 ## 6. M0 Golden Integer vs. FP32 Reference Error Bound (Task 1.5)
 
 In the M0 golden decoder (`setun/ref/m0.py`), every linear projection ($Q, K, V, O, \text{gate}, \text{up}, \text{down}$) quantizes its input activation vector $\mathbf{x} \in \mathbb{R}^K$ to signed `int8` ($[-127, 127]$) via per-token symmetric absmax scaling ($s_x = \max_i |x_i| / 127$) and executes the exact hardware `row_dot` with `round_shift_right(..., shift)`.

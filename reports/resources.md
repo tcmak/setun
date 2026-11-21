@@ -43,3 +43,11 @@ $$\text{Max useful MACs/cycle at }62.08\text{ MHz} = \frac{B_{mem} \times 10^9}{
 - **Group Scale DSP Mode:** 0 DSPs everywhere (default -nodsp LUT multipliers).
 - **Measured Single-Cycle Row Timing (`nextpnr-ecp5`):** Out-of-context place-and-route on `LFE5U-85F-6BG381C` measures **62.08 MHz** across the unpipelined `group_acc + dot_in -> scale_u16 multiply -> row_acc` critical path in `GroupAccumulateScale` (pipelining for >= 100 MHz board closure scheduled in Season 3 Task `6.3`). Multi-row (`R=4`, `R=8`) XC7 figures are directly synthesized from `TernaryTile` (`Task 2.4`, including shared activation LUTRAM/BRAM and serialized output mux); board capacity counts remain `[EXTRAPOLATED from R=1]` per-vendor row budgets.
 - **Memory-bound regime:** Even on the smallest Artix-7 (`XC7A35T`) in 0-DSP mode, compute fabric fits more MACs/cycle than external DDR3/SPI weight bandwidth can feed at 62.08 MHz—confirming that memory burst efficiency (`Phase 3.2`) governs throughput.
+
+## 4. Output Requantization Stage (`Requantize` 48-bit -> `int8`, Task 2.5)
+
+Shared 1-row/cycle 2-stage pipelined requantizer (`II = 1`, 1 instance per `TernaryTile` behind the serialized output mux):
+
+| Width (`in -> out`) | XC7 LUT6 | XC7 FFs | XC7 DSP48E1 | ECP5 LUT4 | ECP5 FFs | ECP5 MULT18 | Measured ECP5 Fmax |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `48b -> 8b` | 2640 | 117 | 0 | 6017 | 117 | 0 | 49.08 MHz |

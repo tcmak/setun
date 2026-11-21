@@ -155,5 +155,17 @@
       "cells_per_mac": 41.828,
       "fmax_mhz": null
     }
-  ]
+  ],
+  "requantize_stage": {
+    "in_bits": 48,
+    "out_bits": 8,
+    "nodsp": true,
+    "xc7_lut6": 2640,
+    "xc7_ffs": 117,
+    "xc7_dsps": 0,
+    "ecp5_lut4": 6017,
+    "ecp5_ffs": 117,
+    "ecp5_dsps": 0,
+    "ecp5_fmax_mhz": 49.08
+  }
 }

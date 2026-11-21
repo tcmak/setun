@@ -210,7 +210,7 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 2.5 Requantize / output stage [M] · *S2*
 - **Do:** convert row results to the next op's input format (scale, round, saturate) per spec.
 - **Accept:**
-  - [ ] bit-exact on corner cases: saturation at both ends, rounding ties, zero
+  - [X] bit-exact on corner cases: saturation at both ends, rounding ties, zero
 
 ### 2.6 Resource and Fmax characterization [M] · *S1*
 - **Do:** scripted Yosys runs (generic and `synth_xilinx` for LUT6 counts); sweep R, L, G, A; write `reports/resources.md` and `.json`; CI compares against `reports/baseline.json`.
