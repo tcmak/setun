@@ -6,6 +6,7 @@ import argparse
 import importlib.metadata
 import importlib.util
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,29 @@ def probe_yosys() -> str:
         return "MISSING"
     m = re.search(r"Yosys\s+([0-9]+\.[0-9]+(?:\+[0-9]+)?)", out)
     return m.group(1) if m else out.splitlines()[0]
+
+
+def resolve_nextpnr_ecp5_bin() -> str | None:
+    venv_bin = Path(sys.executable).resolve().parent
+    for name in ("nextpnr-ecp5", "yowasp-nextpnr-ecp5"):
+        found = shutil.which(name)
+        if found:
+            return found
+        candidate = venv_bin / name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def probe_nextpnr_ecp5() -> str:
+    exe = resolve_nextpnr_ecp5_bin()
+    if not exe:
+        return "MISSING"
+    out = get_cmd_output([exe, "--version"])
+    if not out:
+        return "MISSING"
+    m = re.search(r"Version\s+(?:nextpnr-)?([0-9]+\.[0-9]+(?:\.[0-9]+)?)", out)
+    return m.group(1) if m else out.splitlines()[-1]
 
 
 def probe_pkg_version(pkg: str) -> str:
@@ -103,6 +127,8 @@ def probe_all(keys: list[str]) -> dict[str, str]:
             actual[k] = probe_verilator()
         elif k == "yosys":
             actual[k] = probe_yosys()
+        elif k == "nextpnr-ecp5":
+            actual[k] = probe_nextpnr_ecp5()
         elif k.startswith("git:"):
             pkg = k.split(":", 1)[1]
             actual[k] = probe_git_pkg(pkg)

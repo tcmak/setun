@@ -30,7 +30,7 @@ resource-report:
 	$(PYTHON) scripts/resource_report.py
 
 resource-check:
-	$(PYTHON) scripts/resource_report.py --check-baseline
+	$(PYTHON) scripts/resource_report.py --check
 
 ci:
 	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock --banner

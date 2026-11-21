@@ -32,7 +32,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 2. **Multiplier-Free Ternary MAC Lanes (`0 DSPs` in `TernaryDot`):** Multiplying a signed `int8` activation $x \in [-128, +127]$ by $w \in \{-1, 0, +1\}$ requires **zero hardware multipliers**—only a 2-to-1 multiplexer/negator per lane feeding a balanced binary adder tree in standard FPGA LUTs.
 
-3. **Abundant Compute Headroom on Low-Cost FPGAs:** In default zero-DSP mode, a canonical 64-lane, 128-group `TernaryRow` synthesizes to **3,300 LUT6, 0 DSPs** (`51.56 LUTs/MAC`) on Xilinx 7-Series fabric (or **2,697 LUT6, 1 DSP48E1** with `--use-dsp` opt-in). Even a small Artix-7 (`XC7A35T`) fits 5 parallel rows (**320 MACs/cycle** at $100\text{ MHz}$ in zero-DSP mode), exceeding the external DDR3 weight-streaming ceiling.
+3. **Abundant Compute Headroom on Low-Cost FPGAs:** In default zero-DSP mode, a canonical 64-lane, 128-group `TernaryRow` synthesizes to **3,300 LUT6, 0 DSPs** (`51.56 LUTs/MAC`) on Xilinx 7-Series fabric (or **2,697 LUT6, 1 DSP48E1** with `--use-dsp` opt-in), and places-and-routes at **62.08 MHz** out-of-context on Lattice `ECP5-85F` (`nextpnr-ecp5`, unpipelined single-cycle row accumulation; pipelined $\ge 100\text{ MHz}$ closure in Season 3 Task `6.3`). Even a small Artix-7 (`XC7A35T`) fits 5 parallel rows (**320 MACs/cycle**, `[EXTRAPOLATED from R=1]`), exceeding the external DDR3 weight-streaming ceiling.
 
 ## Architecture & How It Works
 
@@ -95,7 +95,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 ### 1. Environment Setup (WSL2 Ubuntu / Linux)
 
-Setun uses a pinned Python virtual environment (`.venv`) alongside system `verilator` (`5.020`) and `yosys` (`0.33`). Verify your toolchain health with:
+Setun uses a pinned Python virtual environment (`.venv`)—including `migen==0.10.0` and `yowasp-nextpnr-ecp5==0.11.1.0.post826` (`nextpnr-ecp5` `0.11.1` + `prjtrellis` ECP5 chipdb)—alongside system `verilator` (`5.020`) and `yosys` (`0.33`). Verify your toolchain health with:
 
 * `source .venv/bin/activate`
 

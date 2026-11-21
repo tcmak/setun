@@ -123,3 +123,51 @@ def test_repo_toolchain_lock_requires_migen_0_10_0() -> None:
         f"toolchain.lock invariant violated: expected migen = '0.10.0', got {locks.get('migen')!r}"
     )
     assert "git:migen" not in locks, "toolchain.lock must not use floating git:migen entry"
+
+
+def test_doctor_enforces_nextpnr_ecp5_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Task C1.1b: doctor.py and toolchain.lock must pin and enforce nextpnr-ecp5."""
+    repo_lock = Path(__file__).resolve().parent.parent.parent / "toolchain.lock"
+    repo_locks = doctor.parse_lockfile(repo_lock)
+    assert "nextpnr-ecp5" in repo_locks, (
+        "[test_doctor:toolchain.lock] missing required 'nextpnr-ecp5' pin in toolchain.lock"
+    )
+    assert hasattr(doctor, "probe_nextpnr_ecp5"), (
+        "[test_doctor:doctor] missing probe_nextpnr_ecp5() in scripts/doctor.py"
+    )
+
+    lockfile = _write_test_lockfile(tmp_path)
+    lockfile.write_text(
+        lockfile.read_text(encoding="utf-8") + "nextpnr-ecp5 = 0.11.1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(doctor, "probe_python", lambda: "3.12")
+    monkeypatch.setattr(doctor, "probe_verilator", lambda: "5.020")
+    monkeypatch.setattr(doctor, "probe_yosys", lambda: "0.33")
+    monkeypatch.setattr(
+        doctor,
+        "probe_pkg_version",
+        lambda pkg: "0.10.0" if pkg == "migen" else ("1.8.1" if pkg == "cocotb" else "MISSING"),
+    )
+    litex_map = {
+        "litex": "9187839f2d275352ef6f0d7ab14431e2a66b8f81",
+        "litedram": "f2d22975d67229676e10308ae6e71b819b6afe42",
+        "liteeth": "9712c3899c4b9d162aca5aef403889ab2c8c4542",
+    }
+    monkeypatch.setattr(
+        doctor,
+        "probe_git_pkg",
+        lambda pkg: "INSTALLED_NON_GIT" if pkg == "migen" else litex_map.get(pkg, "MISSING"),
+    )
+
+    monkeypatch.setattr(doctor, "probe_nextpnr_ecp5", lambda: "0.11.1")
+    assert doctor.main(["--lockfile", str(lockfile)]) == 0
+
+    monkeypatch.setattr(doctor, "probe_nextpnr_ecp5", lambda: "MISSING")
+    rc = doctor.main(["--lockfile", str(lockfile)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "nextpnr-ecp5" in captured.err
+    assert "MISSING" in captured.err

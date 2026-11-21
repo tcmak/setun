@@ -4,6 +4,8 @@
 python = 3.12
 verilator = 5.020
 yosys = 0.33
+nextpnr-ecp5 = 0.11.1
+yowasp-nextpnr-ecp5 = 0.11.1.0.post826
 cocotb = 1.8.1
 migen = 0.10.0
 git:litex = 9187839f2d275352ef6f0d7ab14431e2a66b8f81

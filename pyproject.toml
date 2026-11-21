@@ -22,6 +22,7 @@ dev = [
     "cocotb>=1.8,<1.9",
     "cocotb-test>=0.2.4",
     "pythondata-misc-tapcfg",
+    "yowasp-nextpnr-ecp5==0.11.1.0.post826",
 ]
 
 [project.scripts]

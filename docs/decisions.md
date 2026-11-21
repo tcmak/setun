@@ -48,9 +48,9 @@ ADR-011: Hardware Group-Scale Representation
 Status: Accepted for Season 1 (Task 1.4a / 2.2b)
 Decision: Pre-converted 16-bit unsigned fixed-point mantissa (uint16) per group, paired with a shared per-row (or per-tensor) right-shift exponent (shift).
 
-ADR-012: Host Toolchain & Environment Pinning (Task 0.2a)
-Status: Accepted for Season 1
-Decision: Native Ubuntu/Debian (WSL2) system packages via apt (verilator, yosys, gtkwave) combined with a local Python virtual environment (.venv) pinned via toolchain.lock and verified by make doctor. Containerization (Dockerfile) is deferred to Task 0.2b.
+ADR-012: Host Toolchain & Environment Pinning (Task 0.2a; Amended in Task C1.1b)
+Status: Accepted for Season 1; Amended 2026-11-20
+Decision: Native Ubuntu/Debian (WSL2) system packages via apt (verilator, yosys) combined with a local Python virtual environment (.venv, including migen==0.10.0 and yowasp-nextpnr-ecp5==0.11.1.0.post826 providing deterministic nextpnr-ecp5 0.11.1 + prjtrellis ECP5 chipdbs without requiring root) pinned via toolchain.lock and verified by make doctor. Containerization (Dockerfile) is deferred to Task 0.2b.
 
 ADR-013: Cross-Portfolio Mythos-Loop Alignment & Season 3 HIL Parity Runner
 Status: Accepted (2026-11-18)

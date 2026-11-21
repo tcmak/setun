@@ -1,6 +1,7 @@
 {
   "synth_flow": "yosys synth_xilinx -family xc7 -noiopad -nodsp",
   "nodsp": true,
+  "measured_ecp5_fmax_mhz": 62.08,
   "configs": [
     {
       "rows": 1,
@@ -14,7 +15,8 @@
       "luts_per_mac": 97.0,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "SYNTHESIZED (R=1)"
     },
     {
       "rows": 1,
@@ -28,7 +30,8 @@
       "luts_per_mac": 95.5,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "SYNTHESIZED (R=1)"
     },
     {
       "rows": 1,
@@ -42,7 +45,8 @@
       "luts_per_mac": 51.562,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "SYNTHESIZED (R=1)"
     },
     {
       "rows": 1,
@@ -56,7 +60,8 @@
       "luts_per_mac": 54.484,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "SYNTHESIZED (R=1)"
     },
     {
       "rows": 1,
@@ -70,7 +75,8 @@
       "luts_per_mac": 44.188,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "SYNTHESIZED (R=1)"
     },
     {
       "rows": 1,
@@ -84,7 +90,8 @@
       "luts_per_mac": 91.219,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "SYNTHESIZED (R=1)"
     },
     {
       "rows": 4,
@@ -98,7 +105,8 @@
       "luts_per_mac": 51.562,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "[EXTRAPOLATED from R=1]"
     },
     {
       "rows": 8,
@@ -112,7 +120,8 @@
       "luts_per_mac": 51.562,
       "dsps_per_row": 0.0,
       "nodsp": true,
-      "vendor": "xc7"
+      "vendor": "xc7",
+      "basis": "[EXTRAPOLATED from R=1]"
     }
   ],
   "multivendor_ref": [
@@ -123,16 +132,18 @@
       "logic_cells": 3300,
       "ffs": 114,
       "dsps": 0,
-      "cells_per_mac": 51.562
+      "cells_per_mac": 51.562,
+      "fmax_mhz": null
     },
     {
       "vendor": "ecp5",
-      "flow": "yosys synth_ecp5 -nodsp",
+      "flow": "yosys synth_ecp5 -nodsp + nextpnr-ecp5 (--85k -6)",
       "logic_unit": "LUT4",
       "logic_cells": 4741,
       "ffs": 114,
       "dsps": 0,
-      "cells_per_mac": 74.078
+      "cells_per_mac": 74.078,
+      "fmax_mhz": 62.08
     },
     {
       "vendor": "cyclonev",
@@ -141,7 +152,8 @@
       "logic_cells": 2677,
       "ffs": 114,
       "dsps": 0,
-      "cells_per_mac": 41.828
+      "cells_per_mac": 41.828,
+      "fmax_mhz": null
     }
   ]
 }
