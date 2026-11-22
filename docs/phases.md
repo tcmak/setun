@@ -245,6 +245,13 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
   - [X] GEMV with memory-resident weights is bit-exact for N, K ∈ {64, 256, 2048}
   - [X] steady-state bus utilization ≥ 80% **(initial)**, reported
 
+### 3.2b Packed `int8` output DMA writer [S] · *S2*
+- **Do:** Coalesce 4 consecutive `int8` row outputs into one 32-bit LE word (`out_addr + 4*m`) when `ctrl.req_enable == 1`, flushing ragged tails (`N % 4 != 0`) with Wishbone byte-enable strobes `sel = (1 << (N % 4)) - 1`; preserve wide `int32[N]` DMA writes when `ctrl.req_enable == 0`.
+- **Accept:**
+  - [X] contiguous `int8[N]` (`act_addr`-compatible zero-copy layout) verified for aligned (`N ∈ {4, 16, 64}`) and ragged (`N ∈ {1, 2, 3, 5, 7, 13}`) row counts
+  - [X] trailing sentinel bytes at `out_addr + N` untouched when `N % 4 != 0`
+  - [X] `perf_bus_beats` confirms `⌈N / 4⌉` output write beats (`req_enable == 1`) and wide `int32[N]` (`req_enable == 0`, including `N > 512`)
+
 ### 3.3 `AccelDriver` host abstraction [M] · *S2 · S3 (board backend)*
 - **Do:** Python API (`write_csr`, `dma_write`, `dma_read`, `launch`, `wait`, `perf`) with backends: cocotb-direct, Etherbone via `litex_server`/`RemoteClient` (`sim`), later `board`.
 - **Accept:**

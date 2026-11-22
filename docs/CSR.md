@@ -76,7 +76,8 @@ Pulsing `ctrl.start = 1` **first** clears prior `rows_completed`, `error`, `err_
   - `weight_addr == 0` and `scale_addr == 0`: external stream / CSR push mode (`3.1a`/`3.1b`).
   - `weight_addr != 0` and `scale_addr != 0`: hardware Wishbone DMA mode (`ternary_accel_dma` master). Setting only one of `weight_addr` or `scale_addr` non-zero raises `ERR_ADDR_ALIGN` (`err_code = 0x8`, `status.error = 1`, `busy = 0`) immediately on `ctrl.start`.
   - `act_addr != 0`: DMA bursts `ceil(K / G) * (G / 4)` 32-bit words (`4` `int8` lanes/word, little-endian) into the activation scratchpad BRAM before weight streaming; `act_addr == 0` uses activations already staged via `act_word_idx` / `act_word_data`.
-  - `out_addr != 0`: after `TernaryTile` (and optional `Requantize`) commits all `N` rows to the output scratchpad BRAM, DMA writes `N` signed `int32` words to `out_addr` before asserting `status.done = 1`.
+  - `out_addr != 0` (`ctrl.req_enable == 0`): DMA reads `N` signed `int32` wide results from `out_scratch_mem` (`max_rows x 32b`) and writes `N` 32-bit words (`sel = 0xF`) to `out_addr + 4*r` before asserting `status.done = 1`.
+  - `out_addr != 0` (`ctrl.req_enable == 1`, Task `3.2b`): hardware coalesces 4 consecutive `int8` row outputs into one 32-bit little-endian word (`row 4m+k` at bits `[8k+7 : 8k]`, matching `act_addr` zero-copy layout) and writes `ceil(N / 4)` beats to `out_addr + 4*m`. When `N % 4 != 0`, the final beat asserts Wishbone byte-enable strobes `sel = (1 << (N % 4)) - 1` (`0x1`, `0x3`, or `0x7`) so bytes at `>= out_addr + N` are never clobbered. On-chip CSR readback (`out_row_idx` -> `out_row_data`) continues to return per-row signed `int32` values.
 - **Memory layout & alignment rules:**
   - All non-zero pointers (`weight_addr`, `scale_addr`, `act_addr`, `out_addr`) must be 4-byte aligned (`addr[1:0] == 0`).
   - `weight_addr` points directly to unmodified row-major `.ttape` `packed_trits` bytes (`N * ceil(K / G) * (G / 4)` bytes).

@@ -115,7 +115,7 @@ class TernaryAccel(Module, AutoCSR):
         self.scale_valid = Signal(name="ext_scale_valid")
         self.scale_ready = Signal(name="ext_scale_ready")
 
-        # 32-bit Wishbone burst DMA master interface (Task 3.2)
+        # 32-bit Wishbone burst DMA master interface (Tasks 3.2 & 3.2b)
         self.dma_wb = wishbone.Interface(data_width=32, adr_width=30, bursting=True)
 
         # -------------------------------------------------------------------
@@ -282,6 +282,13 @@ class TernaryAccel(Module, AutoCSR):
         out_rd_port = out_scratch_mem.get_port(async_read=False)
         self.specials += out_scratch_mem, out_wr_port, out_rd_port
 
+        # Dedicated 32-bit packed int8 staging BRAM for req_enable == 1 (Task 3.2b)
+        out_pack_depth = max((self.max_rows + 3) // 4, 128)
+        out_pack_mem = Memory(width=32, depth=out_pack_depth)
+        out_pack_wr = out_pack_mem.get_port(write_capable=True)
+        out_pack_rd = out_pack_mem.get_port(async_read=False)
+        self.specials += out_pack_mem, out_pack_wr, out_pack_rd
+
         stripe_mem_depth = max(self.max_beats, 128) if rows > 1 else 2
         stripe_entry_bits = 2 * lanes + 16
         sw_ports = []
@@ -423,12 +430,34 @@ class TernaryAccel(Module, AutoCSR):
             any_dma_run.eq(weight_dma_active | act_dma_active | out_dma_active),
         ]
 
+        # Output beat count & combinational tail byte-enable strobe (Task 3.2b)
+        out_dma_beats_total = Signal(17, name="out_dma_beats_total")
+        is_final_out_beat = Signal(name="is_final_out_beat")
+        tail_rem_2b = Signal(2, name="tail_rem_2b")
+        tail_sel_4b = Signal(4, name="tail_sel_4b")
+        out_wb_sel = Signal(4, name="out_wb_sel")
+
+        self.comb += [
+            out_dma_beats_total.eq(Mux(req_en_sig, (num_rows_sig + 3) >> 2, num_rows_sig)),
+            is_final_out_beat.eq((dma_out_idx + 1) >= out_dma_beats_total),
+            tail_rem_2b.eq(num_rows_sig[0:2]),
+            Case(
+                tail_rem_2b,
+                {
+                    0: tail_sel_4b.eq(0b1111),
+                    1: tail_sel_4b.eq(0b0001),
+                    2: tail_sel_4b.eq(0b0011),
+                    3: tail_sel_4b.eq(0b0111),
+                },
+            ),
+            out_wb_sel.eq(Mux(req_en_sig & is_final_out_beat, tail_sel_4b, 0xF)),
+        ]
+
         # Wishbone DMA Master Bus Drive
         burst_cti = Mux(burst_rem == 1, _CTI_BURST_END, _CTI_BURST_INC)
         self.comb += [
-            self.dma_wb.sel.eq(0xF),
             self.dma_wb.bte.eq(0),
-            self.dma_wb.dat_w.eq(out_rd_port.dat_r),
+            self.dma_wb.dat_w.eq(Mux(req_en_sig, out_pack_rd.dat_r, out_rd_port.dat_r)),
             Case(
                 dma_state,
                 {
@@ -436,6 +465,7 @@ class TernaryAccel(Module, AutoCSR):
                         self.dma_wb.cyc.eq(1),
                         self.dma_wb.stb.eq(1),
                         self.dma_wb.we.eq(0),
+                        self.dma_wb.sel.eq(0xF),
                         self.dma_wb.adr.eq(cur_act_waddr),
                         self.dma_wb.cti.eq(burst_cti),
                     ],
@@ -443,6 +473,7 @@ class TernaryAccel(Module, AutoCSR):
                         self.dma_wb.cyc.eq(1),
                         self.dma_wb.stb.eq(1),
                         self.dma_wb.we.eq(0),
+                        self.dma_wb.sel.eq(0xF),
                         self.dma_wb.adr.eq(cur_scale_waddr),
                         self.dma_wb.cti.eq(burst_cti),
                     ],
@@ -450,6 +481,7 @@ class TernaryAccel(Module, AutoCSR):
                         self.dma_wb.cyc.eq(1),
                         self.dma_wb.stb.eq(1),
                         self.dma_wb.we.eq(0),
+                        self.dma_wb.sel.eq(0xF),
                         self.dma_wb.adr.eq(cur_trit_waddr),
                         self.dma_wb.cti.eq(burst_cti),
                     ],
@@ -457,6 +489,7 @@ class TernaryAccel(Module, AutoCSR):
                         self.dma_wb.cyc.eq(1),
                         self.dma_wb.stb.eq(1),
                         self.dma_wb.we.eq(1),
+                        self.dma_wb.sel.eq(out_wb_sel),
                         self.dma_wb.adr.eq(cur_out_waddr),
                         self.dma_wb.cti.eq(_CTI_CLASSIC),
                     ],
@@ -464,6 +497,7 @@ class TernaryAccel(Module, AutoCSR):
                         self.dma_wb.cyc.eq(0),
                         self.dma_wb.stb.eq(0),
                         self.dma_wb.we.eq(0),
+                        self.dma_wb.sel.eq(0xF),
                         self.dma_wb.adr.eq(0),
                         self.dma_wb.cti.eq(_CTI_CLASSIC),
                     ],
@@ -472,17 +506,21 @@ class TernaryAccel(Module, AutoCSR):
         ]
 
         # Output BRAM Read Port Mux (prefetch idx 0 in WAIT_COMPUTE; 2-cyc writes)
+        next_out_rd_adr = Mux(dma_ack, dma_out_idx + 1, dma_out_idx)
         self.comb += [
             If(
                 dma_state == _DMA_WAIT_COMPUTE,
                 out_rd_port.adr.eq(0),
+                out_pack_rd.adr.eq(0),
             )
             .Elif(
                 dma_state == _DMA_OUT_WRITE_WB,
-                out_rd_port.adr.eq(Mux(dma_ack, dma_out_idx + 1, dma_out_idx)),
+                out_rd_port.adr.eq(next_out_rd_adr),
+                out_pack_rd.adr.eq(next_out_rd_adr),
             )
             .Else(
                 out_rd_port.adr.eq(self.out_row_idx.storage),
+                out_pack_rd.adr.eq(0),
             ),
             self.out_row_data.status.eq(out_rd_port.dat_r),
         ]
@@ -760,7 +798,7 @@ class TernaryAccel(Module, AutoCSR):
             ]
 
         # -------------------------------------------------------------------
-        # Output Routing: Raw Shifted int48/int32 vs. Requantize int8 Stage
+        # Output Routing: Wide int32 Scratchpad + Packed int8 Coalescer (3.2b)
         # -------------------------------------------------------------------
         req_i8_signed = Signal((8, True), name="req_i8_signed")
         req_ext_48 = Signal((acc_bits, True), name="req_ext_48")
@@ -804,6 +842,34 @@ class TernaryAccel(Module, AutoCSR):
             out_wr_port.we.eq(out_commit_valid & (out_commit_row < self.max_rows)),
         ]
 
+        # Coalesce 4 consecutive int8 row results into 32-bit LE words for req_enable == 1
+        pack_bytes = Array([Signal(8, name=f"out_pb_{k}") for k in range(3)])
+        pack_sub_k = Signal(2, name="pack_sub_k")
+        pack_word_idx = Signal(16, name="pack_word_idx")
+        cur_i8_u8 = Signal(8, name="cur_i8_u8")
+        pack_is_last_row = Signal(name="pack_is_last_row")
+        pack_flush = Signal(name="pack_flush")
+        pack_live_u32 = Signal(32, name="pack_live_u32")
+
+        pb0 = Mux(pack_sub_k == 0, cur_i8_u8, pack_bytes[0])
+        pb1 = Mux(pack_sub_k == 1, cur_i8_u8, Mux(pack_sub_k < 1, 0, pack_bytes[1]))
+        pb2 = Mux(pack_sub_k == 2, cur_i8_u8, Mux(pack_sub_k < 2, 0, pack_bytes[2]))
+        pb3 = Mux(pack_sub_k == 3, cur_i8_u8, 0)
+
+        self.comb += [
+            pack_sub_k.eq(out_commit_row[0:2]),
+            pack_word_idx.eq(out_commit_row[2:16]),
+            cur_i8_u8.eq(out_commit_val48[0:8]),
+            pack_is_last_row.eq((out_commit_row + 1) >= num_rows_sig),
+            pack_flush.eq((pack_sub_k == 3) | pack_is_last_row),
+            pack_live_u32.eq(Cat(pb0, pb1, pb2, pb3)),
+            out_pack_wr.adr.eq(pack_word_idx),
+            out_pack_wr.dat_w.eq(pack_live_u32),
+            out_pack_wr.we.eq(
+                out_commit_valid & req_en_sig & pack_flush & (pack_word_idx < out_pack_depth)
+            ),
+        ]
+
         # Status & Performance CSR wiring
         busy_wire = Signal(name="busy_wire")
         done_wire = Signal(name="done_wire")
@@ -844,7 +910,7 @@ class TernaryAccel(Module, AutoCSR):
         ]
 
         # -------------------------------------------------------------------
-        # Sequential State Updates (Stage Words, DMA FSM, Stripe Feeder, Telemetry)
+        # Sequential State Updates
         # -------------------------------------------------------------------
         stage_csr_stmts = [
             If(csr_sub_idx == w, stage_words[w].eq(self.act_word_data.storage))
@@ -961,6 +1027,9 @@ class TernaryAccel(Module, AutoCSR):
                 scale_half_idx.eq(0),
                 trit_sub_idx.eq(0),
                 trit_row_word_idx.eq(0),
+                pack_bytes[0].eq(0),
+                pack_bytes[1].eq(0),
+                pack_bytes[2].eq(0),
             )
             .Elif(
                 start_sig,
@@ -983,6 +1052,9 @@ class TernaryAccel(Module, AutoCSR):
                 scale_half_idx.eq(0),
                 trit_sub_idx.eq(0),
                 trit_row_word_idx.eq(0),
+                pack_bytes[0].eq(0),
+                pack_bytes[1].eq(0),
+                pack_bytes[2].eq(0),
                 If(
                     start_err_mask != 0,
                     err_sticky.eq(1),
@@ -1140,7 +1212,7 @@ class TernaryAccel(Module, AutoCSR):
                             If(
                                 dma_ack,
                                 If(
-                                    (dma_out_idx + 1) >= num_rows_sig,
+                                    is_final_out_beat,
                                     out_dma_done.eq(1),
                                     dma_state.eq(_DMA_IDLE),
                                 ).Else(
@@ -1162,6 +1234,12 @@ class TernaryAccel(Module, AutoCSR):
                     out_commit_valid,
                     last_res.eq(out_commit_val48),
                     rows_done.eq(rows_done + 1),
+                    If(
+                        req_en_sig,
+                        If(pack_sub_k == 0, pack_bytes[0].eq(cur_i8_u8)),
+                        If(pack_sub_k == 1, pack_bytes[1].eq(cur_i8_u8)),
+                        If(pack_sub_k == 2, pack_bytes[2].eq(cur_i8_u8)),
+                    ),
                     If(
                         out_commit_sat,
                         req_sat_sticky.eq(1),

@@ -35,13 +35,13 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 - [x] `3.1a` Single-row `TernaryAccel` LiteX wrapper, `.ttape` composition test & deterministic CSR export (`setun/soc/ternary_accel.py`, `reports/csr.json`, `reports/csr.h`)
 - [x] `3.1b` Document CSR register contract (`docs/CSR.md`) and upgrade `TernaryAccel` to wrap multi-row `TernaryTile`
 - [x] `3.2` Weight DMA burst reader from SimSoC SDRAM + activation/output scratchpad BRAMs
-- [ ] `3.2b` Packed `int8` output DMA writer (`4 × int8` rows per 32-bit beat when `req_enable = 1`, byte-masked tail flush for `N % 4 != 0`, matching `act_addr` layout)
+- [x] `3.2b` Packed `int8` output DMA writer (`4 × int8` rows per 32-bit beat when `req_enable = 1`, byte-masked tail flush for `N % 4 != 0`, matching `act_addr` layout)
   - **Do:** Audit and upgrade the `TernaryAccel` output write path (`setun/soc/ternary_accel.py` and `docs/CSR.md`) when `ctrl.req_enable == 1`: coalesce 4 consecutive `int8` row results into one 32-bit little-endian word (`row 4m+k` at bits `[8k+7 : 8k]`, matching the `act_addr` input activation layout) written to `out_addr + 4*m`. On `last == 1` when `N % 4 != 0`, flush the partial word using Wishbone byte-enable strobes (`sel = (1 << (N % 4)) - 1`) so trailing bytes after `out_addr + N - 1` are never clobbered. Preserve unquantized wide-word writes when `ctrl.req_enable == 0`.
   - **Accept:**
-    - [ ] Output memory layout for `req_enable == 1` matches `int8[N]` contiguous bytes (`act_addr`-compatible zero-copy layout) for both aligned (`N ∈ {4, 16, 64}`) and ragged (`N ∈ {1, 2, 3, 5, 7, 13}`) row counts
-    - [ ] Trailing sentinel bytes in SDRAM immediately at `out_addr + N` remain untouched when `N % 4 != 0`
-    - [ ] `perf_bus_beats` (or bus write counter) confirms exactly `⌈N / 4⌉` output write beats for `req_enable == 1` (4× reduction vs. 1 beat/row)
-    - [ ] `req_enable == 0` wide accumulator readback remains bit-exact and backwards-compatible
+    - [x] Output memory layout for `req_enable == 1` matches `int8[N]` contiguous bytes (`act_addr`-compatible zero-copy layout) for both aligned (`N ∈ {4, 16, 64}`) and ragged (`N ∈ {1, 2, 3, 5, 7, 13}`) row counts
+    - [x] Trailing sentinel bytes in SDRAM immediately at `out_addr + N` remain untouched when `N % 4 != 0`
+    - [x] `perf_bus_beats` (or bus write counter) confirms exactly `⌈N / 4⌉` output write beats for `req_enable == 1` (4× reduction vs. 1 beat/row)
+    - [x] `req_enable == 0` wide accumulator readback remains bit-exact and backwards-compatible
 
 ### Block D — Hybrid Decode & Gate 3
 - [ ] `3.3a` `AccelDriver` Python simulation backend (`setun/runtime/`)

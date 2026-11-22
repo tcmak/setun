@@ -80,6 +80,8 @@ def run_cocotb_verilator(
                 "--trace-structs",
                 "-Wno-fatal",
                 "-Wno-INITIALDLY",
+                "-Wno-WIDTHEXPAND",
+                "-Wno-WIDTHTRUNC",
             ],
             plus_args=["--trace"],
             waves=True,
