@@ -6,9 +6,12 @@
 
 ## Status & Roadmap
 
-* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; Season 2 Block B datapath (`WeightUnpacker`, `TernaryTile`, `Requantize`, PR/nightly Verilator sweeps) complete; Season 2 Block C (`TernaryAccel` CSRs + `CTI_BURST_INCREMENTING` RAM DMA at >86%–97% bus utilization) complete; `AccelDriver` (`3.3a`) and hybrid `M0` decode (`3.4`–`3.6`) next).
+**Current State:**
+- **Season 1 — COMPLETE:** 0-DSP `TernaryDot` + `GroupAccumulateScale` RTL verified across $6 \times 10^5$ Verilator vectors; Yosys + `nextpnr-ecp5` resource/Fmax baseline locked.
+- **Season 2 — Blocks A–C COMPLETE:** `M0` golden model & `TTAPE v1.0` loader (`1.5`–`1.6`), `WeightUnpacker` + multi-row `TernaryTile` + `Requantize` (`2.3`–`2.5`, `2.8b`), and LiteX `TernaryAccel` SoC wrapper with `CTI_BURST_INCREMENTING` RAM DMA & zero-copy `4 × int8` output writeback at 86%–97%+ bus utilization (`0.4`, `3.1`–`3.2b`).
+- **Up Next (Season 2 Block D — Gate 3):** `AccelDriver` (`3.3a`), `setun run` hybrid `M0` decode (`3.4`), `setun diff` mismatch debugger (`3.5`), and `make sim-m0` system-sim CI (`3.6`).
 
-* **Facts Checked:** `2026-11-21`
+* **Facts Checked:** `2026-11-22`
 
 * **Planning & Governance:**
 
