@@ -19,6 +19,7 @@ pip install -e ".[dev]"
 make doctor           # Verify pinned LiteX, Verilator, cocotb, and Yosys versions
 make ci               # Run lint, RTL unit tests, and LiteX SimSoC smoke suite
 make resource-report  # Reproduce LUT/BRAM/DSP and nextpnr-ecp5 fmax tables
+```
 
 ## Status & Roadmap
 
