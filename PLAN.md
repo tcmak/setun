@@ -34,13 +34,20 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 - [x] `0.4` Minimal CSR peripheral stub in `SimSoC` (`setun/accelerators/stub.py`, `targets/sim.py`)
 - [x] `3.1a` Single-row `TernaryAccel` LiteX wrapper, `.ttape` composition test & deterministic CSR export (`setun/soc/ternary_accel.py`, `reports/csr.json`, `reports/csr.h`)
 - [x] `3.1b` Document CSR register contract (`docs/CSR.md`) and upgrade `TernaryAccel` to wrap multi-row `TernaryTile`
-- [ ] `3.2` Weight DMA burst reader from SimSoC SDRAM + activation/output scratchpad BRAMs
+- [x] `3.2` Weight DMA burst reader from SimSoC SDRAM + activation/output scratchpad BRAMs
+- [ ] `3.2b` Packed `int8` output DMA writer (`4 × int8` rows per 32-bit beat when `req_enable = 1`, byte-masked tail flush for `N % 4 != 0`, matching `act_addr` layout)
+  - **Do:** Audit and upgrade the `TernaryAccel` output write path (`setun/soc/ternary_accel.py` and `docs/CSR.md`) when `ctrl.req_enable == 1`: coalesce 4 consecutive `int8` row results into one 32-bit little-endian word (`row 4m+k` at bits `[8k+7 : 8k]`, matching the `act_addr` input activation layout) written to `out_addr + 4*m`. On `last == 1` when `N % 4 != 0`, flush the partial word using Wishbone byte-enable strobes (`sel = (1 << (N % 4)) - 1`) so trailing bytes after `out_addr + N - 1` are never clobbered. Preserve unquantized wide-word writes when `ctrl.req_enable == 0`.
+  - **Accept:**
+    - [ ] Output memory layout for `req_enable == 1` matches `int8[N]` contiguous bytes (`act_addr`-compatible zero-copy layout) for both aligned (`N ∈ {4, 16, 64}`) and ragged (`N ∈ {1, 2, 3, 5, 7, 13}`) row counts
+    - [ ] Trailing sentinel bytes in SDRAM immediately at `out_addr + N` remain untouched when `N % 4 != 0`
+    - [ ] `perf_bus_beats` (or bus write counter) confirms exactly `⌈N / 4⌉` output write beats for `req_enable == 1` (4× reduction vs. 1 beat/row)
+    - [ ] `req_enable == 0` wide accumulator readback remains bit-exact and backwards-compatible
 
 ### Block D — Hybrid Decode & Gate 3
 - [ ] `3.3a` `AccelDriver` Python simulation backend (`setun/runtime/`)
-- [ ] `3.4` Hybrid M0 decode loop (linear layers on SimSoC `TernaryAccel`, non-linear ops on host)
+- [ ] `3.4` Hybrid M0 decode loop & `setun run` CLI (`setun run <model.ttape> --backend ref|sim --tokens N` in `setun/cli.py`: linear layers on SimSoC `TernaryAccel`, non-linear ops on host, printing token stream + CSR `cycles/tok` and `MB/s` summary)
 - [ ] `3.5` `setun diff` layer-by-layer mismatch debugger (`setun/cli.py`)
-- [ ] `3.6` System-sim CI (`make sim-m0`, 16 tokens bit-exact vs. M0 golden)
+- [ ] `3.6` System-sim CI (`make sim-m0`: `setun run` `--backend sim` vs. `--backend ref` 16 tokens bit-exact, including randomized `reset_less` register init and SDRAM wait-state jitter)
 
 ---
 
@@ -48,12 +55,12 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 
 **Goal:** Synthesize, place-and-route, and run M0 bit-exact on a real DDR-equipped FPGA board at ≥ 100 MHz (**Gate 6**).
 
-- [ ] `6.1` Candidate board selection (`ADR-007`)
+- [ ] `6.1` Candidate board selection (`ADR-007`, evaluate Lattice ECP5-85F / LambdaConcept ECPIX-5 512MB via open yosys+nextpnr flow vs. Altera Cyclone V / Terasic DE10-Nano 1GB via Quartus Lite + ARM HPS AXI bridge)
 - [ ] `6.2` Board target & `make fpga-build`
 - [ ] `6.3` Fit & timing closure (≥ 100 MHz measured `nextpnr` / vendor STA, zero negative slack)
 - [ ] `6.4` `.ttape` weight loader to board DDR (Etherbone / SD)
-- [ ] `3.3b` `AccelDriver` board backend (`setun/runtime/`)
-- [ ] `6.5` Run M0 on real hardware (16 tokens bit-exact vs. `setun/ref/m0.py` golden)
+- [ ] `3.3b` `AccelDriver` board backend (`setun/runtime/`, wired into `setun run --backend board`)
+- [ ] `6.5` Run M0 on real hardware (`setun run m0.ttape --backend board --tokens 16` bit-exact vs. `--backend ref` + 256-token continuous DDR burst stability soak)
 - [ ] `6.6` First real tok/s, MB/s, and wall-plug power measurements
 
 ---
@@ -62,8 +69,8 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 
 *(Boundary invariant: `setun` consumes strictly `.ttape` containers from `TernaryTape.jl` and never implements GGUF parsers, host language compilers, or HTTP/OpenAI model servers.)*
 
-- **Track A — Real Dense Model (`M1`) on DDR Board (Gate 1 & Gate 7 / v0.1 Demo):** Bump `third_party/TernaryTape` for `M1` `.ttape` exports; `1.4` (`RMSNorm`/`RoPE`/`SwiGLU`/`Softmax` reference & fixed-point numerics in `setun/ref/`), `1.5b` (`M1` golden oracle), `1.7`, `1.8`, `7.1`–`7.6`.
+- **Track A — Real Dense Model (`M1`) on DDR Board (Gate 1 & Gate 7 / v0.1 Demo):** Add standalone converter in `TernaryTape.jl` (`hf_bitnet_to_ttape.py` packing native 1.58-bit checkpoints into `TTAPE v1.0`) and bump `third_party/TernaryTape`; `1.4` (`RMSNorm`/`SubLN`, `RoPE`, `SwiGLU` + `ReLU²`, dynamic `int8` absmax, and `Softmax` in `setun/ref/`), `1.5b` (`M1` golden oracle + perplexity gate), `1.7`, `1.8`, `7.1`–`7.6` (extending `setun run` with `--prompt` + `--tokenizer` for live terminal text generation).
 - **Track B — Full Decoder on Chip with Command Sequencer (Gate 4):** `4.1`–`4.8`, `4.10`, `4.11`.
 - **Track C — Hardware Command-Schedule Emitter `setun pack-schedule | inspect` (Gate 5):** Lower `.ttape` layer graphs into static DMA/command-sequencer descriptor tables (`5.1`–`5.8`; strictly hardware descriptor packing, not a general host compiler).
-- **Track D — Minimal Board Driver & Hardware Benchmark CLI (`setun bench`):** Thin UART/DMA/Etherbone driver in `setun/runtime/` and cycle/throughput/power measurement harness (`8.1`, `8.3`; zero HTTP/serving stack).
+- **Track D — Minimal Board Driver & Hardware CLI (`setun run | bench`):** Thin UART/DMA/Etherbone driver in `setun/runtime/`, `--schedule` fast-path execution in `setun run`, and cycle/throughput/power measurement harness (`8.1`, `8.3`; zero HTTP/serving stack).
 - **Track E — Prefill & GEMM Batching:** `4.9`, `8.4`.

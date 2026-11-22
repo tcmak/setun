@@ -53,7 +53,9 @@ def run_cocotb_verilator(
 
     verilog_path = sim_dir / f"{toplevel}.v"
     v_out = verilog.convert(dut, ios=ios, name=toplevel)
-    v_out.write(str(verilog_path))
+    verilog_path.write_text(v_out.main_source, encoding="utf-8")
+    for data_name, data_content in v_out.data_files.items():
+        (sim_dir / data_name).write_text(data_content, encoding="utf-8")
 
     extra_env = {
         "RANDOM_SEED": str(resolved_seed),

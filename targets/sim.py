@@ -1,4 +1,4 @@
-"""LiteX SimSoC target for Setun (Tasks 0.3, 0.4, 3.1a, & 3.1b)."""
+"""LiteX SimSoC target for Setun (Tasks 0.3, 0.4, 3.1a, 3.1b, & 3.2)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ from litex.build.generic_platform import Pins, Subsignal
 from litex.build.sim import SimPlatform
 from litex.build.sim.config import SimConfig
 from litex.soc.integration.builder import Builder, builder_argdict, builder_args
-from litex.soc.integration.soc_core import SoCCore, soc_core_argdict, soc_core_args
+from litex.soc.integration.soc_core import (
+    SoCCore,
+    get_mem_data,
+    soc_core_argdict,
+    soc_core_args,
+)
 from litex.soc.interconnect import wishbone
 from migen.genlib.io import CRG
 
@@ -39,6 +44,7 @@ class SetunSimSoC(SoCCore):
         accel_beat_bits: int = 256,
         accel_max_k: int = 2048,
         accel_max_rows: int = 2048,
+        ram_init: list[int] | Path | str | None = None,
         expose_host_wb: bool = False,
         use_external_crg: bool = True,
         **kwargs,
@@ -46,7 +52,16 @@ class SetunSimSoC(SoCCore):
         platform = SetunSimPlatform()
         kwargs.pop("uart_name", None)
         kwargs.setdefault("csr_data_width", 32)
+        kwargs.setdefault("bus_bursting", True)
         kwargs.setdefault("ident_version", False)
+
+        if ram_init is not None:
+            if isinstance(ram_init, (str, Path)):
+                kwargs["integrated_main_ram_init"] = get_mem_data(
+                    str(ram_init), data_width=32, endianness="little"
+                )
+            else:
+                kwargs["integrated_main_ram_init"] = list(ram_init)
 
         super().__init__(
             platform=platform,
@@ -70,6 +85,7 @@ class SetunSimSoC(SoCCore):
                 max_k=accel_max_k,
                 max_rows=accel_max_rows,
             )
+            self.bus.add_master(name="ternary_accel_dma", master=self.ternary_accel.dma_wb)
 
         if expose_host_wb:
             self.host_wb = wishbone.Interface(data_width=32, adr_width=30)
@@ -89,6 +105,12 @@ def main() -> None:
         "--no-ternary-accel",
         action="store_true",
         help="Disable TernaryAccel row pipeline peripheral",
+    )
+    parser.add_argument(
+        "--ram-init",
+        type=str,
+        default=None,
+        help="Preload little-endian binary image into main_ram at 0x40000000 (Task 3.2)",
     )
     parser.add_argument(
         "--export-csr-reports",
@@ -113,7 +135,7 @@ def main() -> None:
 
     soc_kwargs["cpu_type"] = None
     soc_kwargs["integrated_rom_size"] = 0
-    soc_kwargs["integrated_main_ram_size"] = 0x10000
+    soc_kwargs["integrated_main_ram_size"] = 0x400000
     builder_kwargs["compile_software"] = False
 
     if not builder_kwargs.get("csr_json"):
@@ -123,6 +145,7 @@ def main() -> None:
     soc = SetunSimSoC(
         with_accel_stub=args.with_accel_stub,
         with_ternary_accel=not args.no_ternary_accel,
+        ram_init=args.ram_init,
         **soc_kwargs,
     )
 

@@ -251,7 +251,7 @@
         "config_bus_standard": "wishbone",
         "config_bus_data_width": 32,
         "config_bus_address_width": 32,
-        "config_bus_bursting": 0
+        "config_bus_bursting": 1
     },
     "memories": {
         "sram": {
@@ -261,7 +261,7 @@
         },
         "main_ram": {
             "base": 1073741824,
-            "size": 65536,
+            "size": 4194304,
             "type": "cached"
         },
         "csr": {

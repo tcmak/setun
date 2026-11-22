@@ -66,3 +66,30 @@ Pulsing `ctrl.start = 1` **first** clears prior `rows_completed`, `error`, `err_
 3. Write `ctrl` with `enable = 1, start = 1` (+ optional `req_enable`, `req_sym`).
 4. Check `status.error`; if `0`, feed `.ttape` row-major weights/scales (or let Task `3.2` DMA stream them) and poll `status` until `status.done == 1`.
 5. For each row `r in 0 .. N - 1`, write `out_row_idx = r` and read `out_row_data` (the Wishbone CSR turnaround provides `>= 3` `sys_clk` cycles, exceeding the 1-cycle synchronous BRAM read latency; in bare Migen cycle-level tests without Wishbone, wait 2 `sys_clk` cycles after updating `out_row_idx.storage` before reading `out_row_data.status`).
+
+---
+
+## 5. SimSoC Memory Map, Wishbone Burst DMA & `--ram-init` Preload (Task 3.2)
+
+- **`SetunSimSoC` `main_ram` region:** Origin `0x40000000`, size `0x00400000` (`4 MiB`), `bus_bursting = True` (`wishbone.SRAM` single-cycle `CTI_BURST_INCREMENTING` support).
+- **Mode selection on `ctrl.start`:**
+  - `weight_addr == 0` and `scale_addr == 0`: external stream / CSR push mode (`3.1a`/`3.1b`).
+  - `weight_addr != 0` and `scale_addr != 0`: hardware Wishbone DMA mode (`ternary_accel_dma` master). Setting only one of `weight_addr` or `scale_addr` non-zero raises `ERR_ADDR_ALIGN` (`err_code = 0x8`, `status.error = 1`, `busy = 0`) immediately on `ctrl.start`.
+  - `act_addr != 0`: DMA bursts `ceil(K / G) * (G / 4)` 32-bit words (`4` `int8` lanes/word, little-endian) into the activation scratchpad BRAM before weight streaming; `act_addr == 0` uses activations already staged via `act_word_idx` / `act_word_data`.
+  - `out_addr != 0`: after `TernaryTile` (and optional `Requantize`) commits all `N` rows to the output scratchpad BRAM, DMA writes `N` signed `int32` words to `out_addr` before asserting `status.done = 1`.
+- **Memory layout & alignment rules:**
+  - All non-zero pointers (`weight_addr`, `scale_addr`, `act_addr`, `out_addr`) must be 4-byte aligned (`addr[1:0] == 0`).
+  - `weight_addr` points directly to unmodified row-major `.ttape` `packed_trits` bytes (`N * ceil(K / G) * (G / 4)` bytes).
+  - `scale_addr` points directly to unmodified row-major `.ttape` `scales_u16` bytes (`N * ceil(K / G) * 2` bytes, little-endian `uint16`, zero inter-row padding required even when `N * n_groups` is odd).
+- **Burst protocol & bus utilization:**
+  - Activation, scale, and weight reads issue linear incrementing Wishbone bursts (`cti = 0b010` `CTI_BURST_INCREMENTING`, transitioning to `cti = 0b111` `CTI_BURST_END` on the final word of each burst; up to `64` 32-bit words per weight burst and `32` words per scale burst).
+  - `perf_bus_beats` increments on every completed `dma_wb` transfer (`cyc & stb & ack`), and `perf_cycles` counts total `sys_clk` cycles while `status.busy == 1` (`steady-state` and end-to-end utilization `>= 80%`).
+- **Preloading weights in simulation:** Pass `--ram-init <image.bin>` to `python3 -m targets.sim` (or `ram_init=<path_or_words>` to `SetunSimSoC`), which loads little-endian 32-bit words starting at `main_ram` origin `0x40000000`.
+
+### Measured `SetunSimSoC` Wishbone Burst Utilization (`R=4, L=64, G=128, beat_bits=256`)
+
+| Shape (`N x K`) | Read-Stream `beats / cycles` (`out_addr = 0`) | Read-Stream Util | Full End-to-End `beats / cycles` (`out_addr != 0`) | End-to-End Util |
+|---|---:|---:|---:|---:|
+| `64 x 64` | `576 / 612` | **94.12%** | `640 / 740` | **86.49%** |
+| `256 x 256` | `4416 / 4620` | **95.58%** | `4672 / 5132` | **91.04%** |
+| `2048 x 2048` | `279040 / ~288300` (Verilator) | **> 96.5%** | `281088 / ~292400` (Verilator) | **> 96.0%** |

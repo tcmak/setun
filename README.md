@@ -6,7 +6,7 @@
 
 ## Status & Roadmap
 
-* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; Season 2 Block B datapath (`WeightUnpacker`, `TernaryTile`, `Requantize`, PR/nightly Verilator sweeps) complete; multi-row `TernaryAccel` SoC CSRs (`docs/CSR.md`) online; SDRAM burst DMA (`3.2`) and `M0` cosimulation next).
+* **Current State:** **Season 1 COMPLETE** (core ternary datapath RTL verified against $6 \times 10^5$ Verilator vectors and synthesized via Yosys XC7) · **Season 2 IN PROGRESS** (LiteX Wishbone CSR peripheral, `M0` golden integer/FP32 transformer decoder, and deterministic toy model generator online; multi-row `TernaryTile` verified & synthesized; Season 2 Block B datapath (`WeightUnpacker`, `TernaryTile`, `Requantize`, PR/nightly Verilator sweeps) complete; Season 2 Block C (`TernaryAccel` CSRs + `CTI_BURST_INCREMENTING` RAM DMA at >86%–97% bus utilization) complete; `AccelDriver` (`3.3a`) and hybrid `M0` decode (`3.4`–`3.6`) next).
 
 * **Facts Checked:** `2026-11-21`
 

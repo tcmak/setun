@@ -664,6 +664,16 @@ def run_accel_bram_characterization(
                 acc.perf_cycles.status,
                 acc.perf_bus_beats.status,
                 acc.perf_sat_rows.status,
+                acc.dma_wb.adr,
+                acc.dma_wb.dat_w,
+                acc.dma_wb.dat_r,
+                acc.dma_wb.sel,
+                acc.dma_wb.cyc,
+                acc.dma_wb.stb,
+                acc.dma_wb.we,
+                acc.dma_wb.cti,
+                acc.dma_wb.bte,
+                acc.dma_wb.ack,
             }
 
     dut = _AccelSynthTop()

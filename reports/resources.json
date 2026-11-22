@@ -175,13 +175,13 @@
     "max_k": 2048,
     "max_rows": 2048,
     "nodsp": true,
-    "xc7_lut6": 20381,
-    "xc7_ffs": 1948,
+    "xc7_lut6": 22421,
+    "xc7_ffs": 2843,
     "xc7_brams": 9,
     "xc7_dsps": 0,
-    "ecp5_lut4": 36708,
-    "ecp5_ffs": 1948,
-    "ecp5_dp16kd": 17,
+    "ecp5_lut4": 39922,
+    "ecp5_ffs": 2881,
+    "ecp5_dp16kd": 18,
     "ecp5_dsps": 0
   }
 }

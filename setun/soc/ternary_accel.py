@@ -1,4 +1,4 @@
-"""LiteX AutoCSR wrapper integrating WeightUnpacker + multi-row TernaryTile + Requantize."""
+"""LiteX AutoCSR + Wishbone Burst DMA wrapper for multi-row TernaryTile + Requantize."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import re
 from pathlib import Path
 
 from litex.soc.integration import export
+from litex.soc.interconnect import wishbone
 from litex.soc.interconnect.csr import AutoCSR, CSRField, CSRStatus, CSRStorage
-from migen import Array, Cat, If, Memory, Module, Mux, Signal
+from migen import Array, Case, Cat, If, Memory, Module, Mux, ResetInserter, Signal
+from migen.genlib.fifo import SyncFIFOBuffered
 
 from setun.accelerators.requantize import Requantize
 from setun.accelerators.tile import TernaryTile
@@ -23,12 +25,24 @@ _DETERMINISTIC_BANNER = (
     "//--------------------------------------------------------------------------------"
 )
 
+_CTI_CLASSIC = 0b000
+_CTI_BURST_INC = 0b010
+_CTI_BURST_END = 0b111
+
+_DMA_IDLE = 0
+_DMA_ACT_BURST = 1
+_DMA_STREAM_ARB = 2
+_DMA_SCALE_BURST = 3
+_DMA_TRIT_BURST = 4
+_DMA_WAIT_COMPUTE = 5
+_DMA_OUT_WRITE_WB = 6
+
 
 class TernaryAccel(Module, AutoCSR):
-    """Multi-row streaming ternary GEMV LiteX peripheral (Tasks 3.1a & 3.1b, docs/CSR.md).
+    """Multi-row streaming ternary GEMV LiteX CSR + Wishbone burst DMA peripheral (Tasks 3.1/3.2).
 
     Composes maintainer-owned RTL cores without modifying `setun/accelerators/`:
-      `WeightUnpacker` -> `(R - 1)` sync-BRAM stripe banks -> `TernaryTile(rows=R)` -> `Requantize`
+      `dma_wb` / stream -> `WeightUnpacker` -> `(R-1)` BRAMs -> `TernaryTile` -> `Requantize`
     """
 
     def __init__(
@@ -71,6 +85,8 @@ class TernaryAccel(Module, AutoCSR):
         self.max_beats = max_k // lanes
         self.words_per_slice = lanes // 4
         self.total_act_words = self.max_beats * self.words_per_slice
+        self.dma_capable = (beat_bits >= 32) and (beat_bits % 32 == 0)
+        self.words_per_beat = max(beat_bits // 32, 1)
 
         # Instantiate maintainer-owned RTL cores and unify onto SoCCore's sys clock domain
         unpacker = WeightUnpacker(beat_bits=beat_bits, lanes=lanes, group_size=group_size)
@@ -90,14 +106,17 @@ class TernaryAccel(Module, AutoCSR):
         self.submodules.tile = tile
         self.submodules.requantize = requantize
 
-        # Expose upstream packed weight & group-scale stream ports (`valid`/`ready`)
-        self.trit_data = self.unpacker.trit_data
-        self.trit_last = self.unpacker.trit_last
-        self.trit_valid = self.unpacker.trit_valid
-        self.trit_ready = self.unpacker.trit_ready
-        self.scale_data = self.unpacker.scale_data
-        self.scale_valid = self.unpacker.scale_valid
-        self.scale_ready = self.unpacker.scale_ready
+        # External stream push ports (used when weight_addr == 0 and scale_addr == 0)
+        self.trit_data = Signal(beat_bits, name="ext_trit_data")
+        self.trit_last = Signal(name="ext_trit_last")
+        self.trit_valid = Signal(name="ext_trit_valid")
+        self.trit_ready = Signal(name="ext_trit_ready")
+        self.scale_data = Signal(16, name="ext_scale_data")
+        self.scale_valid = Signal(name="ext_scale_valid")
+        self.scale_ready = Signal(name="ext_scale_ready")
+
+        # 32-bit Wishbone burst DMA master interface (Task 3.2)
+        self.dma_wb = wishbone.Interface(data_width=32, adr_width=30, bursting=True)
 
         # -------------------------------------------------------------------
         # CSR Register Map (#0..#9 locked at Task 3.1a offsets +0x00..+0x24)
@@ -182,7 +201,7 @@ class TernaryAccel(Module, AutoCSR):
         )
 
         # -------------------------------------------------------------------
-        # Task 3.1b Phase-3 CSRs (#10..#21 appended strictly after +0x24)
+        # Phase-3 CSRs (#10..#21 appended strictly after +0x24)
         # -------------------------------------------------------------------
         tile_info_rst = (rows & 0xFF) | ((lanes & 0xFF) << 8) | ((group_size & 0xFFFF) << 16)
         self.tile_info = CSRStatus(
@@ -237,7 +256,6 @@ class TernaryAccel(Module, AutoCSR):
         self.perf_bus_beats = CSRStatus(32, name="perf_bus_beats", description="Accepted beats")
         self.perf_sat_rows = CSRStatus(32, name="perf_sat_rows", description="Clipped int8 rows")
 
-        # Drive constant read-only geometry CSRs
         self.comb += [
             self.info.fields.lanes.eq(lanes),
             self.info.fields.group_size.eq(group_size),
@@ -264,13 +282,6 @@ class TernaryAccel(Module, AutoCSR):
         out_rd_port = out_scratch_mem.get_port(async_read=False)
         self.specials += out_scratch_mem, out_wr_port, out_rd_port
 
-        self.comb += [
-            out_rd_port.adr.eq(self.out_row_idx.storage),
-            self.out_row_data.status.eq(out_rd_port.dat_r),
-        ]
-
-        # (R - 1) synchronous BRAM banks for row-major -> R-row lockstep stripe staging
-        # Pad depth to >= 128 when rows > 1 so Yosys infers DP16KD/RAMB18E1 rather than FFs
         stripe_mem_depth = max(self.max_beats, 128) if rows > 1 else 2
         stripe_entry_bits = 2 * lanes + 16
         sw_ports = []
@@ -284,7 +295,7 @@ class TernaryAccel(Module, AutoCSR):
             sr_ports.append(sr_p)
 
         # -------------------------------------------------------------------
-        # Control, Parameter Validation, and Activation Sync-BRAM Loader FSM
+        # Control, Parameter Validation, and DMA / Stream FIFOs
         # -------------------------------------------------------------------
         enable_sig = self.ctrl.fields.enable
         clear_sig = self.ctrl.fields.clear
@@ -300,17 +311,32 @@ class TernaryAccel(Module, AutoCSR):
         err_n = Signal(name="err_n")
         err_g = Signal(name="err_g")
         err_align = Signal(name="err_align")
+        partial_ptr_err = Signal(name="partial_ptr_err")
+        dma_width_err = Signal(name="dma_width_err")
         start_err_mask = Signal(4, name="start_err_mask")
 
         self.comb += [
             err_k.eq((k_cols_sig == 0) | (k_cols_sig > max_k)),
             err_n.eq((num_rows_sig == 0) | (num_rows_sig > max_rows)),
             err_g.eq(g_cfg_sig != group_size),
+            partial_ptr_err.eq((self.weight_addr.storage != 0) ^ (self.scale_addr.storage != 0)),
+            dma_width_err.eq(
+                0
+                if self.dma_capable
+                else (
+                    (self.weight_addr.storage != 0)
+                    | (self.scale_addr.storage != 0)
+                    | (self.act_addr.storage != 0)
+                    | (self.out_addr.storage != 0)
+                )
+            ),
             err_align.eq(
                 (self.weight_addr.storage[0:2] != 0)
                 | (self.scale_addr.storage[0:2] != 0)
                 | (self.act_addr.storage[0:2] != 0)
                 | (self.out_addr.storage[0:2] != 0)
+                | partial_ptr_err
+                | dma_width_err
             ),
             start_err_mask.eq(Cat(err_k, err_n, err_g, err_align)),
         ]
@@ -324,19 +350,201 @@ class TernaryAccel(Module, AutoCSR):
         perf_beats_cnt = Signal(32, name="perf_beats_cnt")
         perf_sat_cnt = Signal(32, name="perf_sat_cnt")
 
-        # Power-of-two shift helpers for zero-divider group/slice word counts
+        # Power-of-two shift helpers for zero-divider word counts
         g_shift = group_size.bit_length() - 1
-        words_per_group = group_size // 4
-        wpg_shift = words_per_group.bit_length() - 1
+        words_per_group_act = group_size // 4
+        wpg_act_shift = words_per_group_act.bit_length() - 1
         wps_shift = self.words_per_slice.bit_length() - 1
+        wpg_trit = max(group_size // 16, 1)
+        wpg_trit_shift = wpg_trit.bit_length() - 1
 
         k_plus_pad = Signal(17, name="k_plus_pad")
+        n_groups_wire = Signal(17, name="n_groups_wire")
         target_load_words = Signal(17, name="target_load_words")
+        trit_w_per_row_wire = Signal(17, name="trit_w_per_row_wire")
+        trit_total_words_wire = Signal(32, name="trit_total_words_wire")
+        scale_total_u16_wire = Signal(32, name="scale_total_u16_wire")
+        scale_total_words_wire = Signal(32, name="scale_total_words_wire")
+
         self.comb += [
             k_plus_pad.eq(k_cols_sig + (group_size - 1)),
-            target_load_words.eq((k_plus_pad >> g_shift) << wpg_shift),
+            n_groups_wire.eq(k_plus_pad >> g_shift),
+            target_load_words.eq(n_groups_wire << wpg_act_shift),
+            trit_w_per_row_wire.eq(n_groups_wire << wpg_trit_shift),
+            trit_total_words_wire.eq(num_rows_sig * trit_w_per_row_wire),
+            scale_total_u16_wire.eq(num_rows_sig * n_groups_wire),
+            scale_total_words_wire.eq((scale_total_u16_wire + 1) >> 1),
         ]
 
+        # DMA Scale & Trit FIFOs (reset cleanly on clear or start)
+        max_beats_in_burst = (64 + self.words_per_beat - 1) // self.words_per_beat
+        trit_fifo_depth = max_beats_in_burst + 8
+        scale_fifo = ResetInserter()(SyncFIFOBuffered(width=32, depth=64))
+        trit_fifo = ResetInserter()(SyncFIFOBuffered(width=beat_bits + 1, depth=trit_fifo_depth))
+        self.submodules.scale_fifo = scale_fifo
+        self.submodules.trit_fifo = trit_fifo
+        self.comb += [
+            scale_fifo.reset.eq(clear_sig | start_sig),
+            trit_fifo.reset.eq(clear_sig | start_sig),
+        ]
+
+        # DMA Engine State & Registers
+        dma_state = Signal(3, name="dma_state")
+        weight_dma_active = Signal(name="weight_dma_active")
+        act_dma_active = Signal(name="act_dma_active")
+        out_dma_active = Signal(name="out_dma_active")
+        out_dma_done = Signal(name="out_dma_done")
+        any_dma_run = Signal(name="any_dma_run")
+
+        cur_act_waddr = Signal(30, name="cur_act_waddr")
+        cur_scale_waddr = Signal(30, name="cur_scale_waddr")
+        cur_trit_waddr = Signal(30, name="cur_trit_waddr")
+        cur_out_waddr = Signal(30, name="cur_out_waddr")
+
+        dma_act_idx = Signal(17, name="dma_act_idx")
+        dma_out_idx = Signal(17, name="dma_out_idx")
+        burst_rem = Signal(17, name="burst_rem")
+        dma_scale_words_rem = Signal(32, name="dma_scale_words_rem")
+        dma_trit_words_rem = Signal(32, name="dma_trit_words_rem")
+        latched_trit_w_per_row = Signal(17, name="latched_trit_w_per_row")
+        latched_scale_u16_total = Signal(32, name="latched_scale_u16_total")
+        scale_emitted_cnt = Signal(32, name="scale_emitted_cnt")
+        scale_half_idx = Signal(name="scale_half_idx")
+
+        trit_sub_idx = Signal(max=max(self.words_per_beat, 2), name="trit_sub_idx")
+        trit_row_word_idx = Signal(17, name="trit_row_word_idx")
+        trit_pack_words = Array(
+            [Signal(32, name=f"tpack_w_{w}") for w in range(self.words_per_beat)]
+        )
+
+        dma_ack = Signal(name="dma_ack")
+        self.comb += [
+            dma_ack.eq(self.dma_wb.cyc & self.dma_wb.stb & self.dma_wb.ack),
+            any_dma_run.eq(weight_dma_active | act_dma_active | out_dma_active),
+        ]
+
+        # Wishbone DMA Master Bus Drive
+        burst_cti = Mux(burst_rem == 1, _CTI_BURST_END, _CTI_BURST_INC)
+        self.comb += [
+            self.dma_wb.sel.eq(0xF),
+            self.dma_wb.bte.eq(0),
+            self.dma_wb.dat_w.eq(out_rd_port.dat_r),
+            Case(
+                dma_state,
+                {
+                    _DMA_ACT_BURST: [
+                        self.dma_wb.cyc.eq(1),
+                        self.dma_wb.stb.eq(1),
+                        self.dma_wb.we.eq(0),
+                        self.dma_wb.adr.eq(cur_act_waddr),
+                        self.dma_wb.cti.eq(burst_cti),
+                    ],
+                    _DMA_SCALE_BURST: [
+                        self.dma_wb.cyc.eq(1),
+                        self.dma_wb.stb.eq(1),
+                        self.dma_wb.we.eq(0),
+                        self.dma_wb.adr.eq(cur_scale_waddr),
+                        self.dma_wb.cti.eq(burst_cti),
+                    ],
+                    _DMA_TRIT_BURST: [
+                        self.dma_wb.cyc.eq(1),
+                        self.dma_wb.stb.eq(1),
+                        self.dma_wb.we.eq(0),
+                        self.dma_wb.adr.eq(cur_trit_waddr),
+                        self.dma_wb.cti.eq(burst_cti),
+                    ],
+                    _DMA_OUT_WRITE_WB: [
+                        self.dma_wb.cyc.eq(1),
+                        self.dma_wb.stb.eq(1),
+                        self.dma_wb.we.eq(1),
+                        self.dma_wb.adr.eq(cur_out_waddr),
+                        self.dma_wb.cti.eq(_CTI_CLASSIC),
+                    ],
+                    "default": [
+                        self.dma_wb.cyc.eq(0),
+                        self.dma_wb.stb.eq(0),
+                        self.dma_wb.we.eq(0),
+                        self.dma_wb.adr.eq(0),
+                        self.dma_wb.cti.eq(_CTI_CLASSIC),
+                    ],
+                },
+            ),
+        ]
+
+        # Output BRAM Read Port Mux (prefetch idx 0 in WAIT_COMPUTE; 2-cyc writes)
+        self.comb += [
+            If(
+                dma_state == _DMA_WAIT_COMPUTE,
+                out_rd_port.adr.eq(0),
+            )
+            .Elif(
+                dma_state == _DMA_OUT_WRITE_WB,
+                out_rd_port.adr.eq(Mux(dma_ack, dma_out_idx + 1, dma_out_idx)),
+            )
+            .Else(
+                out_rd_port.adr.eq(self.out_row_idx.storage),
+            ),
+            self.out_row_data.status.eq(out_rd_port.dat_r),
+        ]
+
+        # Scale & Trit FIFO Write / Read Wiring into WeightUnpacker
+        if self.words_per_beat == 1:
+            dma_live_beat = self.dma_wb.dat_r[0:beat_bits]
+            beat_complete = Signal(reset=1)
+            self.comb += beat_complete.eq(1)
+        else:
+            dma_live_beat = Cat(
+                *[
+                    Mux(trit_sub_idx == w, self.dma_wb.dat_r, trit_pack_words[w])
+                    for w in range(self.words_per_beat)
+                ]
+            )
+            beat_complete = Signal(name="beat_complete")
+            self.comb += beat_complete.eq(trit_sub_idx == (self.words_per_beat - 1))
+
+        is_trit_row_last = Signal(name="is_trit_row_last")
+        dma_scale_valid = Signal(name="dma_scale_valid")
+        dma_scale_data = Signal(16, name="dma_scale_data")
+        scale_word_done = Signal(name="scale_word_done")
+
+        self.comb += [
+            is_trit_row_last.eq(trit_row_word_idx == (latched_trit_w_per_row - 1)),
+            scale_fifo.din.eq(self.dma_wb.dat_r),
+            scale_fifo.we.eq((dma_state == _DMA_SCALE_BURST) & dma_ack),
+            trit_fifo.din.eq(Cat(dma_live_beat, is_trit_row_last)),
+            trit_fifo.we.eq((dma_state == _DMA_TRIT_BURST) & dma_ack & beat_complete),
+            dma_scale_valid.eq(scale_fifo.readable & (scale_emitted_cnt < latched_scale_u16_total)),
+            dma_scale_data.eq(Mux(scale_half_idx, scale_fifo.dout[16:32], scale_fifo.dout[0:16])),
+            scale_word_done.eq(
+                scale_half_idx | ((scale_emitted_cnt + 1) >= latched_scale_u16_total)
+            ),
+            scale_fifo.re.eq(
+                weight_dma_active & dma_scale_valid & self.unpacker.scale_ready & scale_word_done
+            ),
+            trit_fifo.re.eq(weight_dma_active & self.unpacker.trit_ready),
+            If(
+                weight_dma_active,
+                self.unpacker.trit_data.eq(trit_fifo.dout[0:beat_bits]),
+                self.unpacker.trit_last.eq(trit_fifo.dout[beat_bits]),
+                self.unpacker.trit_valid.eq(trit_fifo.readable),
+                self.trit_ready.eq(0),
+                self.unpacker.scale_data.eq(dma_scale_data),
+                self.unpacker.scale_valid.eq(dma_scale_valid),
+                self.scale_ready.eq(0),
+            ).Else(
+                self.unpacker.trit_data.eq(self.trit_data),
+                self.unpacker.trit_last.eq(self.trit_last),
+                self.unpacker.trit_valid.eq(self.trit_valid),
+                self.trit_ready.eq(self.unpacker.trit_ready),
+                self.unpacker.scale_data.eq(self.scale_data),
+                self.unpacker.scale_valid.eq(self.scale_valid),
+                self.scale_ready.eq(self.unpacker.scale_ready),
+            ),
+        ]
+
+        # -------------------------------------------------------------------
+        # Activation Staging (CSR Push, Sync-BRAM Loader, and DMA_ACT_BURST)
+        # -------------------------------------------------------------------
         act_wr_ptr = Signal(max=act_mem_depth, name="act_wr_ptr")
         stage_words = Array([Signal(32, name=f"stage_w_{w}") for w in range(self.words_per_slice)])
         loading_acts = Signal(name="loading_acts")
@@ -350,6 +558,8 @@ class TernaryAccel(Module, AutoCSR):
         csr_slice_idx = Signal(max=max(self.max_beats, 2), name="csr_slice_idx")
         ld_sub_idx = Signal(max=max(self.words_per_slice, 2), name="ld_sub_idx")
         ld_slice_idx = Signal(max=max(self.max_beats, 2), name="ld_slice_idx")
+        dma_act_sub_idx = Signal(max=max(self.words_per_slice, 2), name="dma_act_sub_idx")
+        dma_act_slice_idx = Signal(max=max(self.max_beats, 2), name="dma_act_slice_idx")
 
         if wps_shift == 0:
             self.comb += [
@@ -357,6 +567,8 @@ class TernaryAccel(Module, AutoCSR):
                 csr_slice_idx.eq(act_wr_ptr),
                 ld_sub_idx.eq(0),
                 ld_slice_idx.eq(ld_resp_idx),
+                dma_act_sub_idx.eq(0),
+                dma_act_slice_idx.eq(dma_act_idx),
             ]
         else:
             self.comb += [
@@ -364,6 +576,8 @@ class TernaryAccel(Module, AutoCSR):
                 csr_slice_idx.eq(act_wr_ptr[wps_shift:]),
                 ld_sub_idx.eq(ld_resp_idx[0:wps_shift]),
                 ld_slice_idx.eq(ld_resp_idx[wps_shift:]),
+                dma_act_sub_idx.eq(dma_act_idx[0:wps_shift]),
+                dma_act_slice_idx.eq(dma_act_idx[wps_shift:]),
             ]
 
         csr_live_slice = Cat(
@@ -378,19 +592,41 @@ class TernaryAccel(Module, AutoCSR):
                 for w in range(self.words_per_slice)
             ]
         )
+        dma_act_live_slice = Cat(
+            *[
+                Mux(dma_act_sub_idx == w, self.dma_wb.dat_r, stage_words[w])
+                for w in range(self.words_per_slice)
+            ]
+        )
 
+        dma_act_fire = Signal(name="dma_act_fire")
         self.comb += [
-            act_wr_port.adr.eq(act_wr_ptr),
-            act_wr_port.dat_w.eq(self.act_word_data.storage),
-            act_wr_port.we.eq(self.act_word_data.re),
-            ld_issue_en.eq(loading_acts & (ld_req_idx < load_word_limit)),
+            dma_act_fire.eq((dma_state == _DMA_ACT_BURST) & dma_ack),
+            If(
+                dma_act_fire,
+                act_wr_port.adr.eq(dma_act_idx),
+                act_wr_port.dat_w.eq(self.dma_wb.dat_r),
+                act_wr_port.we.eq(1),
+            ).Else(
+                act_wr_port.adr.eq(act_wr_ptr),
+                act_wr_port.dat_w.eq(self.act_word_data.storage),
+                act_wr_port.we.eq(self.act_word_data.re),
+            ),
+            ld_issue_en.eq(loading_acts & (~act_dma_active) & (ld_req_idx < load_word_limit)),
             act_rd_port.adr.eq(ld_req_idx),
             If(
+                dma_act_fire,
+                self.tile.act_wr_addr.eq(dma_act_slice_idx),
+                self.tile.act_wr_data.eq(dma_act_live_slice),
+                self.tile.act_wr_en.eq(dma_act_sub_idx == (self.words_per_slice - 1)),
+            )
+            .Elif(
                 ld_resp_valid,
                 self.tile.act_wr_addr.eq(ld_slice_idx),
                 self.tile.act_wr_data.eq(ld_live_slice),
                 self.tile.act_wr_en.eq(ld_sub_idx == (self.words_per_slice - 1)),
-            ).Else(
+            )
+            .Else(
                 self.tile.act_wr_addr.eq(csr_slice_idx),
                 self.tile.act_wr_data.eq(csr_live_slice),
                 self.tile.act_wr_en.eq(
@@ -575,9 +811,20 @@ class TernaryAccel(Module, AutoCSR):
         upper_i32 = Signal((32, True), name="upper_i32")
 
         self.comb += [
-            done_wire.eq((~err_sticky) & (num_rows_sig != 0) & (rows_done >= num_rows_sig)),
+            done_wire.eq(
+                (~err_sticky)
+                & (num_rows_sig != 0)
+                & (rows_done >= num_rows_sig)
+                & ((~out_dma_active) | out_dma_done)
+            ),
             busy_wire.eq(
-                (~err_sticky) & (loading_acts | ((num_rows_sig != 0) & (rows_done < num_rows_sig)))
+                (~err_sticky)
+                & (
+                    loading_acts
+                    | (dma_state != _DMA_IDLE)
+                    | ((num_rows_sig != 0) & (rows_done < num_rows_sig))
+                    | (out_dma_active & (~out_dma_done))
+                )
             ),
             upper_signed.eq(last_res[32:48]),
             upper_i32.eq(upper_signed),
@@ -585,8 +832,8 @@ class TernaryAccel(Module, AutoCSR):
             self.result_hi.status.eq(upper_i32),
             self.status.fields.busy.eq(busy_wire),
             self.status.fields.done.eq(done_wire),
-            self.status.fields.trit_ready.eq(self.unpacker.trit_ready),
-            self.status.fields.scale_ready.eq(self.unpacker.scale_ready),
+            self.status.fields.trit_ready.eq(self.trit_ready),
+            self.status.fields.scale_ready.eq(self.scale_ready),
             self.status.fields.error.eq(err_sticky),
             self.status.fields.req_saturated.eq(req_sat_sticky),
             self.status.fields.err_code.eq(err_code_reg),
@@ -597,7 +844,7 @@ class TernaryAccel(Module, AutoCSR):
         ]
 
         # -------------------------------------------------------------------
-        # Sequential State Updates
+        # Sequential State Updates (Stage Words, DMA FSM, Stripe Feeder, Telemetry)
         # -------------------------------------------------------------------
         stage_csr_stmts = [
             If(csr_sub_idx == w, stage_words[w].eq(self.act_word_data.storage))
@@ -607,6 +854,17 @@ class TernaryAccel(Module, AutoCSR):
             If(ld_sub_idx == w, stage_words[w].eq(act_rd_port.dat_r))
             for w in range(self.words_per_slice)
         ]
+        stage_dma_act_stmts = [
+            If(dma_act_sub_idx == w, stage_words[w].eq(self.dma_wb.dat_r))
+            for w in range(self.words_per_slice)
+        ]
+        tpack_stmts = [
+            If(trit_sub_idx == w, trit_pack_words[w].eq(self.dma_wb.dat_r))
+            for w in range(self.words_per_beat)
+        ]
+
+        next_scale_burst = Mux(dma_scale_words_rem > 32, 32, dma_scale_words_rem[0:17])
+        next_trit_burst = Mux(dma_trit_words_rem > 64, 64, dma_trit_words_rem[0:17])
 
         stripe_sync_stmts = []
         if rows == 1:
@@ -654,10 +912,13 @@ class TernaryAccel(Module, AutoCSR):
             )
 
         self.sync += [
-            # Activation write pointer & stage word updates
             If(
                 self.act_word_idx.re,
                 act_wr_ptr.eq(self.act_word_idx.storage),
+            )
+            .Elif(
+                dma_act_fire,
+                *stage_dma_act_stmts,
             )
             .Elif(
                 self.act_word_data.re,
@@ -673,7 +934,6 @@ class TernaryAccel(Module, AutoCSR):
                 ld_resp_valid,
                 *stage_ld_stmts,
             ),
-            # Atomic reset / start validation / normal execution
             If(
                 clear_sig,
                 err_sticky.eq(0),
@@ -692,10 +952,18 @@ class TernaryAccel(Module, AutoCSR):
                 wr_slice_idx.eq(0),
                 rd_slice_idx.eq(0),
                 align_valid.eq(0),
+                dma_state.eq(_DMA_IDLE),
+                weight_dma_active.eq(0),
+                act_dma_active.eq(0),
+                out_dma_active.eq(0),
+                out_dma_done.eq(0),
+                scale_emitted_cnt.eq(0),
+                scale_half_idx.eq(0),
+                trit_sub_idx.eq(0),
+                trit_row_word_idx.eq(0),
             )
             .Elif(
                 start_sig,
-                # Refinement #5: atomically clear prior sticky status/errors before checking cfg
                 req_sat_sticky.eq(0),
                 rows_done.eq(0),
                 last_res.eq(0),
@@ -709,39 +977,187 @@ class TernaryAccel(Module, AutoCSR):
                 align_valid.eq(0),
                 ld_req_idx.eq(0),
                 ld_resp_valid.eq(0),
+                dma_act_idx.eq(0),
+                dma_out_idx.eq(0),
+                scale_emitted_cnt.eq(0),
+                scale_half_idx.eq(0),
+                trit_sub_idx.eq(0),
+                trit_row_word_idx.eq(0),
                 If(
                     start_err_mask != 0,
                     err_sticky.eq(1),
                     err_code_reg.eq(start_err_mask),
                     loading_acts.eq(0),
+                    dma_state.eq(_DMA_IDLE),
+                    weight_dma_active.eq(0),
+                    act_dma_active.eq(0),
+                    out_dma_active.eq(0),
+                    out_dma_done.eq(0),
                 ).Else(
                     err_sticky.eq(0),
                     err_code_reg.eq(0),
                     loading_acts.eq(1),
                     load_word_limit.eq(target_load_words),
+                    weight_dma_active.eq(self.weight_addr.storage != 0),
+                    act_dma_active.eq(self.act_addr.storage != 0),
+                    out_dma_active.eq(self.out_addr.storage != 0),
+                    out_dma_done.eq(self.out_addr.storage == 0),
+                    cur_act_waddr.eq(self.act_addr.storage[2:32]),
+                    cur_scale_waddr.eq(self.scale_addr.storage[2:32]),
+                    cur_trit_waddr.eq(self.weight_addr.storage[2:32]),
+                    cur_out_waddr.eq(self.out_addr.storage[2:32]),
+                    dma_scale_words_rem.eq(scale_total_words_wire),
+                    dma_trit_words_rem.eq(trit_total_words_wire),
+                    latched_trit_w_per_row.eq(trit_w_per_row_wire),
+                    latched_scale_u16_total.eq(scale_total_u16_wire),
+                    If(
+                        self.act_addr.storage != 0,
+                        burst_rem.eq(target_load_words),
+                        dma_state.eq(_DMA_ACT_BURST),
+                    )
+                    .Elif(
+                        self.weight_addr.storage != 0,
+                        dma_state.eq(_DMA_STREAM_ARB),
+                    )
+                    .Elif(
+                        self.out_addr.storage != 0,
+                        dma_state.eq(_DMA_WAIT_COMPUTE),
+                    )
+                    .Else(
+                        dma_state.eq(_DMA_IDLE),
+                    ),
                 ),
             )
             .Else(
-                # 1-cycle synchronous BRAM activation loader FSM
+                # 1-cycle synchronous BRAM activation loader FSM (when act_addr == 0)
                 ld_resp_valid.eq(ld_issue_en),
                 ld_resp_idx.eq(ld_req_idx),
+                If(ld_issue_en, ld_req_idx.eq(ld_req_idx + 1)),
                 If(
-                    ld_issue_en,
-                    ld_req_idx.eq(ld_req_idx + 1),
-                ),
-                If(
-                    loading_acts & ld_resp_valid & ((ld_resp_idx + 1) >= load_word_limit),
+                    loading_acts
+                    & (~act_dma_active)
+                    & ld_resp_valid
+                    & ((ld_resp_idx + 1) >= load_word_limit),
                     loading_acts.eq(0),
+                ),
+                # Scale u16 half-word unpacker
+                If(
+                    weight_dma_active & dma_scale_valid & self.unpacker.scale_ready,
+                    scale_emitted_cnt.eq(scale_emitted_cnt + 1),
+                    If(scale_word_done, scale_half_idx.eq(0)).Else(scale_half_idx.eq(1)),
+                ),
+                # Wishbone Burst DMA FSM
+                Case(
+                    dma_state,
+                    {
+                        _DMA_ACT_BURST: [
+                            If(
+                                dma_ack,
+                                cur_act_waddr.eq(cur_act_waddr + 1),
+                                dma_act_idx.eq(dma_act_idx + 1),
+                                If(
+                                    burst_rem == 1,
+                                    loading_acts.eq(0),
+                                    If(
+                                        weight_dma_active,
+                                        dma_state.eq(_DMA_STREAM_ARB),
+                                    )
+                                    .Elif(
+                                        out_dma_active,
+                                        dma_state.eq(_DMA_WAIT_COMPUTE),
+                                    )
+                                    .Else(
+                                        dma_state.eq(_DMA_IDLE),
+                                    ),
+                                ).Else(
+                                    burst_rem.eq(burst_rem - 1),
+                                ),
+                            )
+                        ],
+                        _DMA_STREAM_ARB: [
+                            If(
+                                (dma_scale_words_rem != 0) & (scale_fifo.level <= 28),
+                                burst_rem.eq(next_scale_burst),
+                                dma_state.eq(_DMA_SCALE_BURST),
+                            )
+                            .Elif(
+                                (dma_trit_words_rem != 0) & (trit_fifo.level <= 4),
+                                burst_rem.eq(next_trit_burst),
+                                dma_state.eq(_DMA_TRIT_BURST),
+                            )
+                            .Elif(
+                                (dma_scale_words_rem == 0) & (dma_trit_words_rem == 0),
+                                dma_state.eq(_DMA_WAIT_COMPUTE),
+                            )
+                        ],
+                        _DMA_SCALE_BURST: [
+                            If(
+                                dma_ack,
+                                cur_scale_waddr.eq(cur_scale_waddr + 1),
+                                dma_scale_words_rem.eq(dma_scale_words_rem - 1),
+                                If(
+                                    burst_rem == 1,
+                                    dma_state.eq(_DMA_STREAM_ARB),
+                                ).Else(
+                                    burst_rem.eq(burst_rem - 1),
+                                ),
+                            )
+                        ],
+                        _DMA_TRIT_BURST: [
+                            If(
+                                dma_ack,
+                                *tpack_stmts,
+                                If(beat_complete, trit_sub_idx.eq(0)).Else(
+                                    trit_sub_idx.eq(trit_sub_idx + 1)
+                                ),
+                                If(is_trit_row_last, trit_row_word_idx.eq(0)).Else(
+                                    trit_row_word_idx.eq(trit_row_word_idx + 1)
+                                ),
+                                cur_trit_waddr.eq(cur_trit_waddr + 1),
+                                dma_trit_words_rem.eq(dma_trit_words_rem - 1),
+                                If(
+                                    burst_rem == 1,
+                                    dma_state.eq(_DMA_STREAM_ARB),
+                                ).Else(
+                                    burst_rem.eq(burst_rem - 1),
+                                ),
+                            )
+                        ],
+                        _DMA_WAIT_COMPUTE: [
+                            If(
+                                rows_done >= num_rows_sig,
+                                If(
+                                    out_dma_active,
+                                    dma_out_idx.eq(0),
+                                    dma_state.eq(_DMA_OUT_WRITE_WB),
+                                ).Else(
+                                    out_dma_done.eq(1),
+                                    dma_state.eq(_DMA_IDLE),
+                                ),
+                            )
+                        ],
+                        _DMA_OUT_WRITE_WB: [
+                            If(
+                                dma_ack,
+                                If(
+                                    (dma_out_idx + 1) >= num_rows_sig,
+                                    out_dma_done.eq(1),
+                                    dma_state.eq(_DMA_IDLE),
+                                ).Else(
+                                    dma_out_idx.eq(dma_out_idx + 1),
+                                    cur_out_waddr.eq(cur_out_waddr + 1),
+                                ),
+                            )
+                        ],
+                    },
                 ),
                 # Telemetry counters
                 If(busy_wire, perf_cycles_cnt.eq(perf_cycles_cnt + 1)),
                 If(
-                    self.trit_valid & self.trit_ready,
+                    Mux(any_dma_run, dma_ack, self.trit_valid & self.trit_ready),
                     perf_beats_cnt.eq(perf_beats_cnt + 1),
                 ),
-                # Stripe feeder state
                 *stripe_sync_stmts,
-                # Output commit from TernaryTile / Requantize
                 If(
                     out_commit_valid,
                     last_res.eq(out_commit_val48),
@@ -772,7 +1188,7 @@ def export_soc_csr_artifacts(
         ident_version=False,
         cpu_type=None,
         integrated_rom_size=0,
-        integrated_main_ram_size=0x10000,
+        integrated_main_ram_size=0x400000,
     )
     soc.finalize()
 
