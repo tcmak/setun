@@ -4,6 +4,22 @@
 
 *Informal pitch: "CUDA for LiteX FPGAs". Named after the Setun (Сетунь), the 1958 balanced-ternary computer built at Moscow State University.*
 
+## What Problem Setun Solves
+
+Running batch-1 ternary LLMs on FPGAs today usually means choosing between closed datacenter toolchains, fragile floating-point soft-CPU stacks, or monolithic single-purpose demos. Setun is built around three engineering bets:
+
+* **Open-Toolchain & Vendor-Portable (No 80 GB Vivado Lock-In):** Synthesizes and closes timing using open-source `yosys` + `nextpnr-ecp5` (Lattice ECP5) alongside standard Altera/Intel flows, targeting quiet, desk-sized DDR boards rather than proprietary datacenter cards.
+* **Pure Fixed-Point, `0-DSP` Determinism:** Multiplier-free ternary MAC lanes (`0 DSPs` by default) paired with explicit integer group scaling and round-half-up bit shifts (`docs/NUMERICS.md`) eliminate IEEE-754 float drift—so NumPy, Verilator, and silicon agree bit-for-bit without needing a soft-CPU FPU.
+* **Drop-In LiteX Overlay, Not a Monolithic Appliance:** `TernaryAccel` wraps cleanly into any LiteX SoC with deterministic `csr.json` / `csr.h` register exports, a verified `.ttape` v1.0 weight format, and a composable CLI (`setun run | diff | bench`) instead of a hard-wired chat ROM.
+
+## Quickstart (Developer & Simulation)
+
+```bash
+pip install -e ".[dev]"
+make doctor           # Verify pinned LiteX, Verilator, cocotb, and Yosys versions
+make ci               # Run lint, RTL unit tests, and LiteX SimSoC smoke suite
+make resource-report  # Reproduce LUT/BRAM/DSP and nextpnr-ecp5 fmax tables
+
 ## Status & Roadmap
 
 **Current State:**

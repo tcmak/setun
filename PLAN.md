@@ -48,6 +48,7 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 - [ ] `3.4` Hybrid M0 decode loop & `setun run` CLI (`setun run <model.ttape> --backend ref|sim --tokens N` in `setun/cli.py`: linear layers on SimSoC `TernaryAccel`, non-linear ops on host, printing token stream + CSR `cycles/tok` and `MB/s` summary)
 - [ ] `3.5` `setun diff` layer-by-layer mismatch debugger (`setun/cli.py`)
 - [ ] `3.6` System-sim CI (`make sim-m0`: `setun run` `--backend sim` vs. `--backend ref` 16 tokens bit-exact, including randomized `reset_less` register init and SDRAM wait-state jitter)
+- [ ] `3.7` End-User Quickstart & Simulation User Guide (`README.md` / `docs/USER_GUIDE.md`: 5-minute walkthrough covering install, `setun run models/m0_toy.ttape --backend sim --tokens 16`, and `setun diff`)
 
 ---
 
@@ -62,6 +63,7 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 - [ ] `3.3b` `AccelDriver` board backend (`setun/runtime/`, wired into `setun run --backend board`)
 - [ ] `6.5` Run M0 on real hardware (`setun run m0.ttape --backend board --tokens 16` bit-exact vs. `--backend ref` + 256-token continuous DDR burst stability soak)
 - [ ] `6.6` First real tok/s, MB/s, and wall-plug power measurements
+- [ ] `6.8` Public hardware showcase & traction release (`docs/results.md` + `README.md` showcase with measured `tok/s`, `MB/s`, LUT/BRAM/0-DSP utilization, and board bring-up photo on ECPIX-5 or DE10-Nano running bit-exact; share with LiteX Discord/mailing list, `r/FPGA`, and Hacker News)
 
 ---
 
