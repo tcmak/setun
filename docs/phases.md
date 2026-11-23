@@ -276,6 +276,10 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
   - [ ] `make sim-m0` runs green nightly in CI
   - [ ] trace and cycle logs saved as downloadable build artifacts
 
+### 3.7 End-User Quickstart & Simulation User Guide
+- **Do:** `docs/USER_GUIDE.md` + `README.md` walkthrough covering setup, running `setun run models/m0_toy.ttape --backend sim --tokens 16`, interpreting CSR `cycles/tok` and `MB/s` counters, and debugging layer mismatches with `setun diff`.
+- **Exit:** Fresh venv walkthrough reproduces bit-exact `ref` vs `sim` output using only documented commands.
+
 **Gate 3 ("first token"):** `setun run m0_toy.ttape --backend sim` tokens == ref (16 tokens bit-exact); cycles/token & MB/s telemetry logged; CI green.
 
 ---
@@ -464,6 +468,10 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 - **Do:** board attached to self-hosted runner; nightly flash-and-test.
 - **Accept:**
   - [ ] nightly HIL job green for 7 consecutive days **(initial)**
+
+### 6.8 Public Hardware Showcase & Traction Release
+- **Do:** Publish `docs/results.md` and top-level `README.md` hardware showcase with measured `tok/s`, `MB/s`, wall-plug power, `0-DSP` LUT/BRAM tables, and board bring-up photo (ECPIX-5 / DE10-Nano running bit-exact) for LiteX, `r/FPGA`, and HN release.
+- **Exit:** All published metrics are reproducible via committed scripts and match `reports/` artifacts.
 
 **Gate 6:** toy model bit-exact on silicon via `setun run --backend board`.
 
