@@ -265,3 +265,59 @@ def test_doctor_probe_fallbacks_and_cli_modes(
     assert doctor.main(["--lockfile", str(write_target), "--write"]) == 0
     parsed = doctor.parse_lockfile(write_target)
     assert parsed == {"python": "3.12", "migen": "0.10.0"}
+
+
+def test_doctor_enforces_ternarytape_spec_v1_0_submodule_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """OQ-001: toolchain.lock and doctor.py must pin third_party/TernaryTape at spec-v1.0."""
+    expected_sha = "3c73f3cc85f0d7a9bf1ccd00b7dc8a100f379920"
+    sub_key = "submodule:third_party/TernaryTape"
+
+    repo_lock = Path(__file__).resolve().parents[2] / "toolchain.lock"
+    repo_locks = doctor.parse_lockfile(repo_lock)
+    assert repo_locks.get(sub_key) == expected_sha, (
+        f"[test_doctor:toolchain.lock] expected {sub_key} = {expected_sha!r} (spec-v1.0), "
+        f"got {repo_locks.get(sub_key)!r}"
+    )
+    assert hasattr(doctor, "probe_submodule"), (
+        "[test_doctor:doctor] missing probe_submodule() in scripts/doctor.py"
+    )
+    assert doctor.probe_submodule("third_party/TernaryTape") == expected_sha
+    assert doctor.probe_submodule("third_party/nonexistent_submodule_1958") == "MISSING"
+
+    lockfile = _write_test_lockfile(tmp_path)
+    lockfile.write_text(
+        lockfile.read_text(encoding="utf-8") + f"{sub_key} = {expected_sha}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(doctor, "probe_python", lambda: "3.12")
+    monkeypatch.setattr(doctor, "probe_verilator", lambda: "5.020")
+    monkeypatch.setattr(doctor, "probe_yosys", lambda: "0.33")
+    monkeypatch.setattr(
+        doctor,
+        "probe_pkg_version",
+        lambda pkg: "0.10.0" if pkg == "migen" else ("1.8.1" if pkg == "cocotb" else "MISSING"),
+    )
+    litex_map = {
+        "litex": "9187839f2d275352ef6f0d7ab14431e2a66b8f81",
+        "litedram": "f2d22975d67229676e10308ae6e71b819b6afe42",
+        "liteeth": "9712c3899c4b9d162aca5aef403889ab2c8c4542",
+    }
+    monkeypatch.setattr(
+        doctor,
+        "probe_git_pkg",
+        lambda pkg: "INSTALLED_NON_GIT" if pkg == "migen" else litex_map.get(pkg, "MISSING"),
+    )
+
+    monkeypatch.setattr(doctor, "probe_submodule", lambda _rel: expected_sha)
+    assert doctor.main(["--lockfile", str(lockfile)]) == 0
+
+    # Drifted draft SHA (spec-v0.1-draft) must fail doctor check
+    monkeypatch.setattr(
+        doctor, "probe_submodule", lambda _rel: "1c30a54130ca071dd7f051abb18ea9f5be4567c4"
+    )
+    rc = doctor.main(["--lockfile", str(lockfile)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert sub_key in err and expected_sha in err

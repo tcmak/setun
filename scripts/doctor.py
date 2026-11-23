@@ -118,6 +118,14 @@ def probe_git_pkg(pkg: str) -> str:
     return "INSTALLED_NON_GIT"
 
 
+def probe_submodule(rel_path: str) -> str:
+    sub_dir = (REPO_ROOT / rel_path).resolve()
+    if not sub_dir.exists():
+        return "MISSING"
+    commit = get_cmd_output(["git", "-C", str(sub_dir), "rev-parse", "HEAD"])
+    return commit if commit else "MISSING"
+
+
 def probe_all(keys: list[str]) -> dict[str, str]:
     actual: dict[str, str] = {}
     for k in keys:
@@ -132,6 +140,9 @@ def probe_all(keys: list[str]) -> dict[str, str]:
         elif k.startswith("git:"):
             pkg = k.split(":", 1)[1]
             actual[k] = probe_git_pkg(pkg)
+        elif k.startswith("submodule:"):
+            rel_path = k.split(":", 1)[1]
+            actual[k] = probe_submodule(rel_path)
         else:
             actual[k] = probe_pkg_version(k)
     return actual
@@ -200,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         if k == "migen":
             continue
         act_val = actual.get(k, "MISSING")
-        if k.startswith("git:") and act_val != "MISSING":
+        if k.startswith(("git:", "submodule:")) and act_val != "MISSING":
             if not act_val.startswith(exp_val) and not exp_val.startswith(act_val):
                 mismatches.append(
                     f"  - [scripts/doctor.py:main] key '{k}' invariant violated: "

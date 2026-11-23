@@ -40,7 +40,7 @@ make resource-report  # Reproduce LUT/BRAM/DSP and nextpnr-ecp5 fmax tables
 
   * [`docs/decisions.md`](docs/decisions.md) — Architecture Decision Records (`ADR-001` through `ADR-015`).
 
-  * [`docs/open-questions.md`](docs/open-questions.md) — Cross-repo blocker log (`OQ-001` resolved in Task B2).
+  * [`docs/open-questions.md`](docs/open-questions.md) — Cross-repo blocker log (`OQ-001` resolved at frozen `spec-v1.0`).
 
 ## Why Ternary LLMs on LiteX FPGAs?
 
