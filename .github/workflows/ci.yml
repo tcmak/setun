@@ -54,6 +54,7 @@ jobs:
           else
             .venv/bin/python -m pip install --no-deps -e .
           fi
+          echo "${{ github.workspace }}/.venv/bin" >> "$GITHUB_PATH"
           .venv/bin/yowasp-nextpnr-ecp5 --version
 
       - name: Cache ccache, Verilator builds, & Yosys/nextpnr synthesis results
