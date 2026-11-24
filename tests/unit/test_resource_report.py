@@ -1,4 +1,4 @@
-"""Unit tests for Yosys multi-vendor resource characterization and 0-DSP default (Task 2.6)."""
+"""Unit tests for Yosys/nextpnr ECP5 + Cyclone V resource & timing characterization."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.resource_report as rr
 from scripts.resource_report import (
     SynthMetrics,
     VendorRowMetrics,
@@ -18,34 +19,38 @@ from scripts.resource_report import (
 
 @pytest.mark.slow
 def test_synthesize_single_row_nodsp_default_vs_optin_dsp() -> None:
-    """Verify default -nodsp uses 0 DSPs while opt-in nodsp=False uses 1 DSP48E1/row."""
-    luts_nodsp, ffs_nodsp, dsps_nodsp = _synthesize_single_row(
-        lanes=16, group_size=64, act_bits=8, nodsp=True, vendor="xc7"
-    )
-    luts_dsp, ffs_dsp, dsps_dsp = _synthesize_single_row(
-        lanes=16, group_size=64, act_bits=8, nodsp=False, vendor="xc7"
-    )
-
-    assert dsps_nodsp == 0, f"Expected 0 DSP48E1 in default -nodsp mode, got {dsps_nodsp}"
-    assert dsps_dsp == 1, f"Expected 1 DSP48E1 in opt-in DSP mode, got {dsps_dsp}"
-    assert luts_nodsp > luts_dsp
-    assert ffs_nodsp >= ffs_dsp
-
-
-@pytest.mark.slow
-def test_synthesize_multivendor_ecp5_and_cyclonev() -> None:
-    """Verify Lattice ECP5 and Intel Cyclone V synthesis succeed with 0 DSPs in default mode."""
+    """Verify default -nodsp uses 0 DSPs while opt-in nodsp=False uses 1 DSP/row on ECP5 & CycV."""
     for vendor in ("ecp5", "cyclonev"):
-        logic, ffs, dsps = _synthesize_single_row(
+        logic_nodsp, ffs_nodsp, dsps_nodsp = _synthesize_single_row(
             lanes=16, group_size=64, act_bits=8, nodsp=True, vendor=vendor
         )
-        assert logic > 0
-        assert ffs > 0
-        assert dsps == 0
+        logic_dsp, ffs_dsp, dsps_dsp = _synthesize_single_row(
+            lanes=16, group_size=64, act_bits=8, nodsp=False, vendor=vendor
+        )
+        assert dsps_nodsp == 0, f"Expected 0 DSPs on {vendor} in -nodsp mode, got {dsps_nodsp}"
+        assert dsps_dsp == 1, f"Expected 1 DSP on {vendor} in --use-dsp mode, got {dsps_dsp}"
+        assert logic_nodsp > logic_dsp
+        assert ffs_nodsp >= ffs_dsp
 
 
-def test_render_markdown_and_baseline_check(tmp_path: Path) -> None:
-    """Verify markdown rendering and baseline regression gate."""
+def test_no_xilinx_xc7_vendor_or_artix_boards_in_policy() -> None:
+    """ADR-007 policy: only Lattice ECP5 and Intel Cyclone V are targeted (no AMD/Xilinx xc7)."""
+    board_vendors = {b["vendor"] for b in rr.CANDIDATE_BOARDS}
+    assert board_vendors == {"ecp5", "cyclonev"}, (
+        f"[test_resource_report:ADR-007] expected ecp5 and cyclonev boards, got {board_vendors}"
+    )
+    board_names = " ".join(str(b["name"]) for b in rr.CANDIDATE_BOARDS)
+    assert "Artix" not in board_names and "XC7" not in board_names
+    assert "ECPIX-5" in board_names and "DE10-Nano" in board_names
+
+    with pytest.raises(ValueError, match="Unsupported synthesis vendor"):
+        _synthesize_single_row(16, 64, 8, nodsp=True, vendor="xc7")
+    with pytest.raises(ValueError, match="Unsupported synthesis vendor"):
+        rr._synthesize_tile(2, 16, 64, 8, nodsp=True, vendor="xc7")
+
+
+def test_governing_fmax_uses_accel_min_and_marks_cyclonev_synth_only(tmp_path: Path) -> None:
+    """Verify throughput uses governing min Fmax (never isolated row 62.08 MHz) and N/A for CycV."""
     sample = [
         SynthMetrics(
             rows=1,
@@ -53,25 +58,111 @@ def test_render_markdown_and_baseline_check(tmp_path: Path) -> None:
             group_size=128,
             act_bits=8,
             macs_per_cycle=64,
-            luts=3300,
+            luts=4741,
             ffs=114,
             dsps=0,
-            luts_per_mac=51.562,
+            luts_per_mac=74.078,
             dsps_per_row=0.0,
             nodsp=True,
-            vendor="xc7",
-        )
+            vendor="ecp5",
+            basis="SYNTHESIZED (TernaryRow)",
+        ),
+        SynthMetrics(
+            rows=1,
+            lanes=64,
+            group_size=128,
+            act_bits=8,
+            macs_per_cycle=64,
+            luts=2677,
+            ffs=114,
+            dsps=0,
+            luts_per_mac=41.828,
+            dsps_per_row=0.0,
+            nodsp=True,
+            vendor="cyclonev",
+            basis="SYNTHESIZED (TernaryRow)",
+        ),
     ]
     vrows = [
-        VendorRowMetrics("xc7", "yosys xc7", "LUT6", 3300, 114, 0, 51.562),
-        VendorRowMetrics("ecp5", "yosys ecp5", "LUT4", 4200, 114, 0, 65.625, 62.5),
-        VendorRowMetrics("cyclonev", "yosys cyclonev", "ALM/LCELL", 2800, 114, 0, 43.75),
+        VendorRowMetrics(
+            "ecp5", "yosys synth_ecp5 -nodsp + nextpnr-ecp5", "LUT4", 4741, 114, 0, 74.078, 62.08
+        ),
+        VendorRowMetrics(
+            "cyclonev",
+            "yosys synth_intel_alm -family cyclonev -nodsp",
+            "ALUT",
+            2677,
+            114,
+            0,
+            41.828,
+            None,
+        ),
     ]
-    md = render_markdown(sample, vrows, nodsp=True)
-    assert "0-DSP Default / -nodsp" in md
-    assert "ecp5" in md
-    assert "cyclonev" in md
+    req_stage = rr.RequantizeStageMetrics(
+        in_bits=48,
+        out_bits=8,
+        nodsp=True,
+        ecp5_lut4=6017,
+        ecp5_ffs=117,
+        ecp5_dsps=0,
+        ecp5_fmax_mhz=49.08,
+        cyclonev_aluts=2100,
+        cyclonev_ffs=117,
+        cyclonev_dsps=0,
+    )
+    accel_soc = rr.AccelBramMetrics(
+        rows=4,
+        lanes=64,
+        group_size=128,
+        max_k=2048,
+        max_rows=2048,
+        nodsp=True,
+        ecp5_lut4=40072,
+        ecp5_ffs=2938,
+        ecp5_dp16kd=19,
+        ecp5_dsps=0,
+        ecp5_fmax_mhz=41.50,
+        cyclonev_aluts=18500,
+        cyclonev_ffs=2910,
+        cyclonev_m10k=24,
+        cyclonev_dsps=0,
+    )
 
+    gov_fmax, gov_stage = rr.resolve_governing_ecp5_fmax(
+        row_fmax_mhz=62.08,
+        requantize_stage=req_stage,
+        accel_soc=accel_soc,
+    )
+    assert gov_fmax == 41.50 and "TernaryAccel" in gov_stage
+
+    # Also verify min selects Requantize if Requantize happens to be slower than TernaryAccel
+    slower_req = rr.RequantizeStageMetrics(48, 8, True, 6017, 117, 0, 38.25, 2100, 117, 0)
+    gov_req, stage_req = rr.resolve_governing_ecp5_fmax(62.08, slower_req, accel_soc)
+    assert gov_req == 38.25 and "Requantize" in stage_req
+
+    md = render_markdown(
+        sample,
+        vrows,
+        nodsp=True,
+        requantize_stage=req_stage,
+        accel_soc=accel_soc,
+    )
+    # 1. Section 3 ceiling MUST use governing 41.50 MHz, NOT isolated TernaryRow 62.08 MHz
+    assert "at 41.50 MHz" in md
+    assert "at 62.08 MHz" not in md
+    # At 41.50 MHz & 1.6 GB/s (ECPIX-5): round(1.6e9 / (0.25 * 41.50e6)) = 154 MACs/cyc (not 103)
+    assert "| 154 |" in md
+    assert "| 103 |" not in md
+    # 2. Synth-only Cyclone V rows MUST show N/A (synth-only, pending Quartus STA)
+    assert md.count("| N/A (synth-only, pending Quartus STA) |") == sum(
+        1 for b in rr.CANDIDATE_BOARDS if b["vendor"] == "cyclonev"
+    )
+    # 3. Section 5 MUST report measured TernaryAccel ECP5 Fmax and Cyclone V M10K BRAMs
+    assert "41.50 MHz" in md
+    assert "M10K" in md and "24" in md
+    assert "XC7" not in md and "LUT6" not in md and "DSP48" not in md
+
+    # 4. Baseline check keyed by (vendor, rows, lanes, group_size, act_bits)
     baseline_file = tmp_path / "baseline.json"
     baseline_file.write_text(
         json.dumps(
@@ -79,106 +170,55 @@ def test_render_markdown_and_baseline_check(tmp_path: Path) -> None:
                 "synth_flow": "test",
                 "configs": [
                     {
+                        "vendor": "ecp5",
                         "rows": 1,
                         "lanes": 64,
                         "group_size": 128,
                         "act_bits": 8,
-                        "luts_per_mac": 50.0,
+                        "luts_per_mac": 72.0,
                     }
                 ],
             }
         ),
         encoding="utf-8",
     )
-
     check_baseline(sample, baseline_file, max_regression=0.10)
     with pytest.raises(RuntimeError, match="Resource regression detected"):
-        check_baseline(sample, baseline_file, max_regression=0.02)
+        check_baseline(sample, baseline_file, max_regression=0.01)
 
 
 @pytest.mark.slow
 def test_ecp5_nextpnr_measured_fmax_and_extrapolated_labels() -> None:
-    """Task C1.1b: Measure real nextpnr-ecp5 fmax_mhz and label R=4/R=8 [EXTRAPOLATED from R=1]."""
-    import scripts.resource_report as rr
-
-    assert hasattr(rr, "_measure_ecp5_fmax_mhz"), (
-        "[test_resource_report] expected _measure_ecp5_fmax_mhz in scripts/resource_report.py"
-    )
+    """Measure real nextpnr-ecp5 row Fmax and verify [EXTRAPOLATED from R=1] labels."""
     fmax = rr._measure_ecp5_fmax_mhz(lanes=16, group_size=64, act_bits=8, nodsp=True)
-    assert isinstance(fmax, float) and 10.0 < fmax < 500.0 and fmax != 100.0, (
-        f"[test_resource_report] expected real measured nextpnr-ecp5 fmax_mhz != 100.0, got {fmax}"
-    )
+    assert isinstance(fmax, float) and 10.0 < fmax < 500.0 and fmax != 100.0
 
     sample = [
         SynthMetrics(
-            rows=1,
-            lanes=64,
-            group_size=128,
-            act_bits=8,
-            macs_per_cycle=64,
-            luts=3300,
-            ffs=114,
-            dsps=0,
-            luts_per_mac=51.562,
-            dsps_per_row=0.0,
-            nodsp=True,
-            vendor="xc7",
-            basis="SYNTHESIZED (R=1)",
+            1, 64, 128, 8, 64, 4741, 114, 0, 74.078, 0.0, True, "ecp5", "SYNTHESIZED (R=1)"
         ),
         SynthMetrics(
-            rows=4,
-            lanes=64,
-            group_size=128,
-            act_bits=8,
-            macs_per_cycle=256,
-            luts=13200,
-            ffs=456,
-            dsps=0,
-            luts_per_mac=51.562,
-            dsps_per_row=0.0,
-            nodsp=True,
-            vendor="xc7",
-            basis="[EXTRAPOLATED from R=1]",
+            4, 64, 128, 8, 256, 18964, 456, 0, 74.078, 0.0, True, "ecp5", "[EXTRAPOLATED from R=1]"
         ),
         SynthMetrics(
-            rows=8,
-            lanes=64,
-            group_size=128,
-            act_bits=8,
-            macs_per_cycle=512,
-            luts=26400,
-            ffs=912,
-            dsps=0,
-            luts_per_mac=51.562,
-            dsps_per_row=0.0,
-            nodsp=True,
-            vendor="xc7",
-            basis="[EXTRAPOLATED from R=1]",
+            8, 64, 128, 8, 512, 37928, 912, 0, 74.078, 0.0, True, "ecp5", "[EXTRAPOLATED from R=1]"
         ),
     ]
     vrows = [
-        VendorRowMetrics("xc7", "yosys xc7", "LUT6", 3300, 114, 0, 51.562, None),
         VendorRowMetrics("ecp5", "yosys+nextpnr-ecp5", "LUT4", 4741, 114, 0, 74.078, fmax),
-        VendorRowMetrics("cyclonev", "yosys cyclonev", "ALM/LCELL", 2677, 114, 0, 41.828, None),
+        VendorRowMetrics("cyclonev", "yosys cyclonev", "ALUT", 2677, 114, 0, 41.828, None),
     ]
     md = render_markdown(sample, vrows, nodsp=True)
-    assert md.count("[EXTRAPOLATED from R=1]") >= 2, (
-        "[test_resource_report] expected both R=4 and R=8 rows labeled '[EXTRAPOLATED from R=1]'"
-    )
-    assert f"{fmax:.2f}" in md, (
-        f"[test_resource_report] expected measured fmax {fmax:.2f} MHz in rendered markdown"
-    )
-    assert "at 100 MHz" not in md, (
-        "[test_resource_report] hardcoded 'at 100 MHz' must be removed from rendered markdown"
-    )
+    assert md.count("[EXTRAPOLATED from R=1]") >= 2
+    assert f"{fmax:.2f}" in md
+    assert "at 100 MHz" not in md
+    assert "N/A (synth-only, pending Quartus STA)" in md
 
 
 def test_synthesize_row_and_tile_elaboration_and_vendor_cell_parsers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify row/tile Verilog elaboration, multi-vendor stat.json cell parsers, and guards."""
-    import scripts.resource_report as rr
-
+    """Verify row/tile/accel Verilog elaboration, ECP5+CycloneV cell parsers, and PnR Fmax."""
     with pytest.raises(ValueError, match="Unsupported synthesis vendor"):
         rr._synthesize_single_row(16, 64, 8, nodsp=True, vendor="unknown_fpga")
     with pytest.raises(ValueError, match="Unsupported synthesis vendor"):
@@ -188,9 +228,9 @@ def test_synthesize_row_and_tile_elaboration_and_vendor_cell_parsers(
         cwd = kwargs.get("cwd")
         if cwd is not None:
             out_dir = Path(str(cwd))
-            for rep_name in ("pnr_report.json", "ecp5_pnr.json"):
+            for rep_name in ("pnr_report.json", "ecp5_pnr.json", "accel_ecp5_pnr.json"):
                 (out_dir / rep_name).write_text(
-                    json.dumps({"fmax": {"sys_clk": {"achieved": 64.25}}}),
+                    json.dumps({"fmax": {"sys_clk": {"achieved": 44.75}}}),
                     encoding="utf-8",
                 )
             return
@@ -200,46 +240,46 @@ def test_synthesize_row_and_tile_elaboration_and_vendor_cell_parsers(
             return
         stat_file = Path(prompt.split("tee -q -o ")[1].split(" stat -json")[0])
         top = prompt.split("-top ")[1].split()[0]
-        if "synth_xilinx" in prompt:
-            cells = {"LUT6": 640, "FDRE": 64, "DSP48E1": 0}
-        elif "synth_ecp5" in prompt:
-            cells = {"LUT4": 512, "TRELLIS_FF": 64}
+        if "synth_ecp5" in prompt:
+            cells = {"LUT4": 512, "TRELLIS_FF": 64, "DP16KD": 4}
         else:
-            cells = {"MISTRAL_ALM": 400, "MISTRAL_FF": 64}
+            cells = {"MISTRAL_ALUT4": 400, "MISTRAL_FF": 64, "MISTRAL_M10K": 6}
         stat_file.write_text(
             json.dumps({"modules": {f"\\{top}": {"num_cells_by_type": cells}}}),
             encoding="utf-8",
         )
 
     monkeypatch.setattr(rr.subprocess, "run", _mock_yosys_and_pnr)
-    assert rr._synthesize_single_row(16, 64, 8, nodsp=True, vendor="xc7") == (640, 64, 0)
     assert rr._synthesize_single_row(16, 64, 8, nodsp=True, vendor="ecp5") == (512, 64, 0)
     assert rr._synthesize_single_row(16, 64, 8, nodsp=True, vendor="cyclonev") == (400, 64, 0)
 
-    # Bound TernaryTile max_k to 64 during unit-test elaboration so Verilog emit runs in <0.1s
     orig_tile = rr.TernaryTile
     monkeypatch.setattr(
         rr,
         "TernaryTile",
         lambda **kw: orig_tile(**{**kw, "max_k": kw["group_size"]}),
     )
-    assert rr._synthesize_tile(2, 16, 64, 8, nodsp=True, vendor="xc7") == (640, 64, 0)
     assert rr._synthesize_tile(2, 16, 64, 8, nodsp=True, vendor="ecp5") == (512, 64, 0)
     assert rr._synthesize_tile(2, 16, 64, 8, nodsp=True, vendor="cyclonev") == (400, 64, 0)
 
-    assert rr._measure_ecp5_fmax_mhz(16, 64, 8, nodsp=True) == 64.25
+    assert rr._measure_ecp5_fmax_mhz(16, 64, 8, nodsp=True) == 44.75
     req_m = rr.run_requantize_characterization(in_bits=16, out_bits=8, nodsp=True)
-    assert (req_m.xc7_lut6, req_m.xc7_ffs, req_m.xc7_dsps) == (640, 64, 0)
     assert (req_m.ecp5_lut4, req_m.ecp5_ffs, req_m.ecp5_dsps) == (512, 64, 0)
-    assert req_m.ecp5_fmax_mhz == 64.25
+    assert (req_m.cyclonev_aluts, req_m.cyclonev_ffs, req_m.cyclonev_dsps) == (400, 64, 0)
+    assert req_m.ecp5_fmax_mhz == 44.75
+
+    acc_m = rr.run_accel_bram_characterization(
+        rows=2, lanes=16, group_size=64, beat_bits=64, max_k=64, max_rows=64, nodsp=True
+    )
+    assert (acc_m.ecp5_lut4, acc_m.ecp5_dp16kd, acc_m.ecp5_dsps) == (512, 4, 0)
+    assert (acc_m.cyclonev_aluts, acc_m.cyclonev_m10k, acc_m.cyclonev_dsps) == (400, 6, 0)
+    assert acc_m.ecp5_fmax_mhz == 44.75
 
 
 def test_resource_report_pipelines_error_guards_and_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Cover _resolve_nextpnr_ecp5, error guards, DSP-bound render, check_baseline, and main()."""
-    import scripts.resource_report as rr
-
     # 1. _resolve_nextpnr_ecp5 venv_bin fallback & missing binary RuntimeError
     fake_venv = tmp_path / "venv_bin"
     fake_venv.mkdir()
@@ -264,7 +304,6 @@ def test_resource_report_pipelines_error_guards_and_cli(
     with pytest.raises(RuntimeError, match="yosys not in PATH"):
         rr.run_accel_bram_characterization()
 
-    # Restore shutil.which for mocked pipeline tests
     monkeypatch.undo()
 
     # 3. _measure_ecp5_fmax_mhz empty fmax & non-positive achieved guards
@@ -300,7 +339,13 @@ def test_resource_report_pipelines_error_guards_and_cli(
                 prompt = cmd[-1]
                 stat_file = Path(prompt.split("tee -q -o ")[1].split(" stat -json")[0])
                 top = prompt.split("-top ")[1].split()[0]
-                cells = {"LUT6": 10, "FDRE": 5, "DSP48E1": dsps, "LUT4": 10, "TRELLIS_FF": 5}
+                cells = {
+                    "LUT4": 10,
+                    "TRELLIS_FF": 5,
+                    "MULT18X18D": dsps,
+                    "MISTRAL_ALUT4": 10,
+                    "MISTRAL_FF": 5,
+                }
                 stat_file.write_text(
                     json.dumps({"modules": {f"\\{top}": {"num_cells_by_type": cells}}}),
                     encoding="utf-8",
@@ -317,21 +362,22 @@ def test_resource_report_pipelines_error_guards_and_cli(
         rr.run_requantize_characterization(in_bits=16, out_bits=8, nodsp=True)
     monkeypatch.undo()
 
-    # 3c. run_accel_bram_characterization 0-DSP and 0-BRAM guards
-    def _fake_accel_run(dsps: int, brams: int):
-        def _run(cmd: list[str], **_kwargs: object) -> None:
+    # 3c. run_accel_bram_characterization 0-DSP, 0-BRAM, empty fmax, and <=0 fmax guards
+    def _fake_accel_run(dsps: int, brams: int, fmax_payload: dict[str, object]):
+        def _run(cmd: list[str], **kwargs: object) -> None:
+            cwd = kwargs.get("cwd")
+            if cwd is not None:
+                (Path(str(cwd)) / "accel_ecp5_pnr.json").write_text(
+                    json.dumps(fmax_payload), encoding="utf-8"
+                )
+                return
             prompt = cmd[-1]
             stat_file = Path(prompt.split("tee -q -o ")[1].split(" stat -json")[0])
             top = prompt.split("-top ")[1].split()[0]
-            cells = {
-                "LUT6": 100,
-                "FDRE": 20,
-                "RAMB18E1": brams,
-                "DSP48E1": dsps,
-                "LUT4": 100,
-                "TRELLIS_FF": 20,
-                "DP16KD": brams,
-            }
+            if "synth_ecp5" in prompt:
+                cells = {"LUT4": 100, "TRELLIS_FF": 20, "DP16KD": brams, "MULT18X18D": dsps}
+            else:
+                cells = {"MISTRAL_ALUT4": 100, "MISTRAL_FF": 20, "MISTRAL_M10K": brams}
             stat_file.write_text(
                 json.dumps({"modules": {f"\\{top}": {"num_cells_by_type": cells}}}),
                 encoding="utf-8",
@@ -339,37 +385,56 @@ def test_resource_report_pipelines_error_guards_and_cli(
 
         return _run
 
-    monkeypatch.setattr(rr.subprocess, "run", _fake_accel_run(dsps=1, brams=4))
+    ok_fmax = {"fmax": {"sys_clk": {"achieved": 42.0}}}
+    monkeypatch.setattr(
+        rr.subprocess, "run", _fake_accel_run(dsps=1, brams=4, fmax_payload=ok_fmax)
+    )
     with pytest.raises(RuntimeError, match="expected 0 DSPs"):
         rr.run_accel_bram_characterization(
-            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=128, max_rows=64, nodsp=True
+            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=64, max_rows=64, nodsp=True
         )
-    monkeypatch.setattr(rr.subprocess, "run", _fake_accel_run(dsps=0, brams=0))
+    monkeypatch.setattr(
+        rr.subprocess, "run", _fake_accel_run(dsps=0, brams=0, fmax_payload=ok_fmax)
+    )
     with pytest.raises(RuntimeError, match="synchronous BRAM inference failed"):
         rr.run_accel_bram_characterization(
-            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=128, max_rows=64, nodsp=True
+            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=64, max_rows=64, nodsp=True
+        )
+    monkeypatch.setattr(
+        rr.subprocess, "run", _fake_accel_run(dsps=0, brams=4, fmax_payload={"fmax": {}})
+    )
+    with pytest.raises(RuntimeError, match="empty 'fmax' section"):
+        rr.run_accel_bram_characterization(
+            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=64, max_rows=64, nodsp=True
+        )
+    monkeypatch.setattr(
+        rr.subprocess,
+        "run",
+        _fake_accel_run(dsps=0, brams=4, fmax_payload={"fmax": {"sys_clk": {"achieved": 0.0}}}),
+    )
+    with pytest.raises(RuntimeError, match="invalid measured ecp5_fmax_mhz"):
+        rr.run_accel_bram_characterization(
+            rows=2, lanes=16, group_size=64, beat_bits=64, max_k=64, max_rows=64, nodsp=True
         )
     monkeypatch.undo()
 
     # 4. render_markdown with nodsp=False (DSP-limited board fit), requantize_stage, and bad fmax
     sample_dsp = [
-        SynthMetrics(1, 64, 128, 8, 64, 2697, 66, 1, 42.141, 1.0, nodsp=False, vendor="xc7")
+        SynthMetrics(1, 64, 128, 8, 64, 1900, 114, 1, 29.688, 1.0, nodsp=False, vendor="ecp5")
     ]
     vrows_dsp = [
-        VendorRowMetrics("xc7", "yosys xc7", "LUT6", 100, 66, 50, 1.56, None),  # DSP-capped!
-        VendorRowMetrics("ecp5", "yosys ecp5", "LUT4", 3500, 66, 1, 54.68, 75.5),
-        VendorRowMetrics("cyclonev", "yosys cycv", "ALM/LCELL", 2200, 66, 1, 34.37, None),
+        VendorRowMetrics("ecp5", "yosys ecp5", "LUT4", 100, 114, 50, 1.56, 75.5),  # DSP-capped!
+        VendorRowMetrics("cyclonev", "yosys cycv", "ALUT", 1500, 114, 1, 23.438, None),
     ]
-    req_stage = rr.RequantizeStageMetrics(48, 8, False, 2100, 117, 1, 5000, 117, 1, 55.25)
+    req_stage = rr.RequantizeStageMetrics(48, 8, False, 5000, 117, 1, 55.25, 1800, 117, 1)
     md_dsp = render_markdown(sample_dsp, vrows_dsp, nodsp=False, requantize_stage=req_stage)
     assert "Opt-In 1 DSP/row Mode" in md_dsp
     assert "Output Requantization Stage" in md_dsp
     assert "55.25 MHz" in md_dsp
 
     bad_vrows = [
-        VendorRowMetrics("xc7", "yosys xc7", "LUT6", 3300, 114, 0, 51.562, None),
         VendorRowMetrics("ecp5", "yosys ecp5", "LUT4", 4741, 114, 0, 74.078, None),
-        VendorRowMetrics("cyclonev", "yosys cycv", "ALM/LCELL", 2677, 114, 0, 41.828, None),
+        VendorRowMetrics("cyclonev", "yosys cycv", "ALUT", 2677, 114, 0, 41.828, None),
     ]
     with pytest.raises(ValueError, match="expected measured ecp5 fmax_mhz > 0"):
         render_markdown(sample_dsp, bad_vrows, nodsp=True)
@@ -380,23 +445,23 @@ def test_resource_report_pipelines_error_guards_and_cli(
 
     base_p = tmp_path / "base.json"
     base_p.write_text(json.dumps({"configs": []}), encoding="utf-8")
-    check_baseline(sample_dsp, base_p)  # untracked key skipped cleanly
+    check_baseline(sample_dsp, base_p)
 
     # 6. run_sweep, run_multivendor_reference, and main() CLI modes (mocked synthesis calls)
     monkeypatch.setattr(rr, "SWEEP_CONFIGS", [(1, 64, 128, 8), (4, 64, 128, 8)])
-    monkeypatch.setattr(rr, "_synthesize_single_row", lambda *_a, **_kw: (3300, 114, 0))
-    monkeypatch.setattr(rr, "_synthesize_tile", lambda *_a, **_kw: (13745, 699, 0))
+    monkeypatch.setattr(rr, "_synthesize_single_row", lambda *_a, **_kw: (4741, 114, 0))
+    monkeypatch.setattr(rr, "_synthesize_tile", lambda *_a, **_kw: (19200, 699, 0))
     monkeypatch.setattr(rr, "_measure_ecp5_fmax_mhz", lambda *_a, **_kw: 62.08)
     monkeypatch.setattr(
         rr,
         "run_requantize_characterization",
-        lambda **_kw: rr.RequantizeStageMetrics(48, 8, True, 2640, 117, 0, 6017, 117, 0, 49.08),
+        lambda **_kw: rr.RequantizeStageMetrics(48, 8, True, 6017, 117, 0, 49.08, 2100, 117, 0),
     )
     monkeypatch.setattr(
         rr,
         "run_accel_bram_characterization",
         lambda **_kw: rr.AccelBramMetrics(
-            4, 64, 128, 2048, 2048, True, 20381, 1948, 9, 0, 36708, 1948, 17, 0
+            4, 64, 128, 2048, 2048, True, 40072, 2938, 19, 0, 41.50, 18500, 2910, 24, 0
         ),
     )
 
@@ -411,8 +476,10 @@ def test_resource_report_pipelines_error_guards_and_cli(
 
     assert rr.main(["--update-baseline", "--check-baseline"]) == 0
     assert j_path.exists() and m_path.exists() and b_path.exists()
+    saved_json = json.loads(j_path.read_text(encoding="utf-8"))
+    assert saved_json["governing_ecp5_fmax_mhz"] == 41.50
     assert rr.main(["--check"]) == 0
-    assert "passed" in capsys.readouterr().out
+    assert "41.50 MHz" in capsys.readouterr().out
 
     # Drift detection in --check for resources.md and resources.json
     m_orig = m_path.read_text(encoding="utf-8")
@@ -427,13 +494,12 @@ def test_resource_report_pipelines_error_guards_and_cli(
 
 
 @pytest.mark.slow
-def test_ternary_accel_bram_inference() -> None:
-    """Task 3.1b: Verify TernaryAccel infers real XC7 RAMB18E1/36E1 and ECP5 DP16KD BRAMs."""
-    from scripts.resource_report import run_accel_bram_characterization
-
-    bram_metrics = run_accel_bram_characterization(
+def test_ternary_accel_bram_and_fmax_characterization() -> None:
+    """Verify TernaryAccel infers ECP5 DP16KD + CycloneV M10K BRAMs and real nextpnr-ecp5 Fmax."""
+    bram_metrics = rr.run_accel_bram_characterization(
         rows=4, lanes=16, group_size=64, beat_bits=64, max_k=512, max_rows=512, nodsp=True
     )
-    assert bram_metrics.xc7_dsps == 0 and bram_metrics.ecp5_dsps == 0
-    assert bram_metrics.xc7_brams >= 2, f"Expected XC7 BRAM inference, got {bram_metrics}"
+    assert bram_metrics.ecp5_dsps == 0 and bram_metrics.cyclonev_dsps == 0
     assert bram_metrics.ecp5_dp16kd >= 2, f"Expected ECP5 DP16KD inference, got {bram_metrics}"
+    assert bram_metrics.cyclonev_m10k >= 2, f"Expected CycloneV M10K inference, got {bram_metrics}"
+    assert 10.0 < bram_metrics.ecp5_fmax_mhz < 500.0 and bram_metrics.ecp5_fmax_mhz != 100.0

@@ -10,7 +10,7 @@ Status: Accepted (`2026-11-21`, Task `3.1b`) · Source of truth: `setun/soc/tern
 
 - **Default SoC geometry:** `rows = 4`, `lanes = 64`, `group_size = 128`, `beat_bits = 256`, `max_k = 2048`, `max_rows = 2048`.
 - **Offset stability invariant:** Registers `#0`–`#9` (`ctrl` through `out_row_data`, `0x1800`–`0x1824`) preserve their exact Task `3.1a` addresses and bit offsets. All Phase-3 multi-row, DMA pointer, requantization, capability, and performance registers (`#10`–`#21`, `0x1828`–`0x1854`) are appended strictly after `out_row_data`.
-- **Synchronous BRAM scratchpads:** Both the quantized `int8` activation buffer (`max_k // 4` 32-bit words) and the row output buffer (`max_rows` 32-bit words), plus the `(R - 1)` row-to-stripe staging banks, use synchronous read ports (`async_read=False`) so Yosys infers dedicated block RAM (`RAMB18E1`/`RAMB36E1` on Xilinx XC7; `DP16KD` on Lattice ECP5) rather than LUT/FF arrays.
+- **Synchronous BRAM scratchpads:** Both the quantized `int8` activation buffer (`max_k // 4` 32-bit words) and the row output buffer (`max_rows` 32-bit words), plus the `(R - 1)` row-to-stripe staging banks, use synchronous read ports (`async_read=False`) so Yosys infers dedicated block RAM (`DP16KD` on Lattice ECP5; `M10K` on Intel Cyclone V) rather than LUT/FF arrays.
 
 ---
 

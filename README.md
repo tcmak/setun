@@ -28,7 +28,7 @@ make resource-report  # Reproduce LUT/BRAM/DSP and nextpnr-ecp5 fmax tables
 - **Season 2 — Blocks A–C COMPLETE:** `M0` golden model & `TTAPE v1.0` loader (`1.5`–`1.6`), `WeightUnpacker` + multi-row `TernaryTile` + `Requantize` (`2.3`–`2.5`, `2.8b`), and LiteX `TernaryAccel` SoC wrapper with `CTI_BURST_INCREMENTING` RAM DMA & zero-copy `4 × int8` output writeback at 86%–97%+ bus utilization (`0.4`, `3.1`–`3.2b`).
 - **Up Next (Season 2 Block D — Gate 3):** `AccelDriver` (`3.3a`), `setun run` hybrid `M0` decode (`3.4`), `setun diff` mismatch debugger (`3.5`), and `make sim-m0` system-sim CI (`3.6`).
 
-* **Facts Checked:** `2026-11-22`
+* **Facts Checked:** `2026-11-24`
 
 * **Planning & Governance:**
 
@@ -42,6 +42,18 @@ make resource-report  # Reproduce LUT/BRAM/DSP and nextpnr-ecp5 fmax tables
 
   * [`docs/open-questions.md`](docs/open-questions.md) — Cross-repo blocker log (`OQ-001` resolved at frozen `spec-v1.0`).
 
+## Portfolio Ownership & Single Source of Truth
+
+`setun` is the **single hardware and numerical source of truth** across the portfolio for:
+
+* **2-bit trit lane semantics & fixed-point rounding/saturation rules** ([`docs/NUMERICS.md`](docs/NUMERICS.md)),
+* **Migen RTL cores** (`setun/accelerators/`),
+* **LiteX SoC integration & deterministic CSR register maps** ([`reports/csr.h`](reports/csr.h), [`reports/csr.json`](reports/csr.json), [`docs/CSR.md`](docs/CSR.md)),
+* **Measured Yosys / `nextpnr-ecp5` resource & timing figures** ([`reports/resources.md`](reports/resources.md), [`reports/resources.json`](reports/resources.json)), and
+* **The bit-exact Python golden reference & co-simulation oracle** (`setun/ref/`).
+
+`setun` consumes canonical `.ttape` v1.0 wire containers and shared golden fixtures via one-way submodule from [`third_party/TernaryTape`](third_party/TernaryTape) (`TernaryTape.jl` at `spec-v1.0`), and strictly excludes wire-format specification prose, host language compilers (`veriObjC`), and HTTP serving frameworks.
+
 ## Why Ternary LLMs on LiteX FPGAs?
 
 Single-batch autoregressive LLM decoding ($\text{batch size} = 1$) is fundamentally **memory-bandwidth bound**, not compute bound: every generated token streams the entire model weight matrix from external memory to perform a matrix-vector multiply ($\mathbf{y} = \mathbf{W}\mathbf{x}$).
@@ -52,7 +64,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 2. **Multiplier-Free Ternary MAC Lanes (`0 DSPs` in `TernaryDot`):** Multiplying a signed `int8` activation $x \in [-128, +127]$ by $w \in \{-1, 0, +1\}$ requires **zero hardware multipliers**—only a 2-to-1 multiplexer/negator per lane feeding a balanced binary adder tree in standard FPGA LUTs.
 
-3. **Abundant Compute Headroom on Low-Cost FPGAs:** In default zero-DSP mode, a canonical 64-lane, 128-group `TernaryRow` synthesizes to **3,300 LUT6, 0 DSPs** (`51.56 LUTs/MAC`) on Xilinx 7-Series fabric (or **2,697 LUT6, 1 DSP48E1** with `--use-dsp` opt-in), and places-and-routes at **62.08 MHz** out-of-context on Lattice `ECP5-85F` (`nextpnr-ecp5`, unpipelined single-cycle row accumulation; pipelined $\ge 100\text{ MHz}$ closure in Season 3 Task `6.3`). Even a small Artix-7 (`XC7A35T`) fits 5 parallel rows (**320 MACs/cycle**, `[EXTRAPOLATED from R=1]`), exceeding the external DDR3 weight-streaming ceiling.
+3. **Abundant Compute Headroom on Open & Non-Xilinx Low-Cost FPGAs (`ADR-007`):** In default zero-DSP mode, a canonical 64-lane, 128-group `TernaryRow` synthesizes to **4,741 LUT4, 0 MULT18X18D** (`74.08 LUT4/MAC`) on Lattice `ECP5-85F` and **2,677 ALUT, 0 MUL18X18** (`41.83 ALUT/MAC`) on Intel `Cyclone V`. Out-of-context `nextpnr-ecp5` (`--85k --speed 6`) measures **62.08 MHz** on isolated `TernaryRow`, **49.08 MHz** on 2-stage `Requantize`, and **20.99 MHz** on the full 4-row `TernaryAccel` SoC top (`40,072 LUT4, 19 DP16KD, 0 DSPs`; pipelined $\ge 100\text{ MHz}$ board closure scheduled in Season 3 Task `6.3`), governing system throughput strictly by the full-top `20.99 MHz` bottleneck (`896` fit MACs/cycle `[EXTRAPOLATED from R=1]` vs. `305` DDR3-matched MACs/cycle at `1.6 GB/s` on `ECPIX-5`). Intel Cyclone V (`DE10-Nano` / `DECA`) rows remain `synth-only` (`N/A` pending Quartus TimeQuest STA).
 
 ## Architecture & How It Works
 
@@ -71,7 +83,7 @@ By constraining linear projection weights to balanced ternary values $w \in \{-1
 
 * **`GroupAccumulateScale` & `TernaryRow` (`setun/accelerators/group_scale.py`):** Accumulates $G/L$ beats ($G \in \{64, 128, 256\}$) into a 16-bit signed group partial sum $P_g$, multiplies by the group's unsigned 16-bit scale (`scale_u16`), accumulates across groups along a matrix row, and applies a hardware-friendly round-half-up arithmetic right shift (`(acc + (1 << (shift - 1))) >> shift`).
 
-  * **DSP Usage Modes (`ADR-004`):** By default, synthesis runs in **zero-DSP mode** (`0 DSPs` across the entire row, mapping the once-per-group $16\text{-bit} \times 16\text{-bit}$ scale multiply to pure LUT fabric: `3,300 LUT6, 114 FFs, 0 DSP48E1` at $L=64, G=128$). Passing `--use-dsp` to `scripts/resource_report.py` opts into **1 `DSP48E1` slice per row** (`2,697 LUT6, 66 FFs, 1 DSP48E1`).
+  * **DSP Usage Modes (`ADR-004`):** By default, synthesis runs in **zero-DSP mode** (`0 DSPs` across the entire row, mapping the once-per-group $16\text{-bit} \times 16\text{-bit}$ scale multiply to pure LUT fabric: `4,741 LUT4, 114 FFs, 0 MULT18X18D` on Lattice ECP5 and `2,677 ALUT, 114 FFs, 0 MUL18X18` on Intel Cyclone V at $L=64, G=128$). Passing `--use-dsp` to `scripts/resource_report.py` opts into **1 hard $18 \times 18$ DSP per row** (`3,942 LUT4, 114 FFs, 1 MULT18X18D` on ECP5; `1,921 ALUT, 114 FFs, 1 MUL18X18` on Cyclone V).
 
 * **LiteX SoC Wrapper & CSR Peripherals (`setun/soc/ternary_accel.py`, `setun/accelerators/stub.py` & `targets/sim.py`):** `SetunSimSoC` integrates both `AccelStub` (`ID`, `VERSION`, `SCRATCH`, free-running cycle `COUNTER`) and `TernaryAccel` (wiring `WeightUnpacker` $\to$ `TernaryDot` $\to$ `GroupAccumulateScale` with CSR activation staging, programmable round-half-up `shift`, completion status, and row result readback) over a 32-bit Wishbone bus, deterministically exporting [`reports/csr.json`](reports/csr.json) and [`reports/csr.h`](reports/csr.h).
 
@@ -137,11 +149,11 @@ Setun uses a pinned Python virtual environment (`.venv`)—including `migen==0.1
 
 * **Small preset (Nightly,** $d_{\text{model}}=128, G=128$**):** `python3 -m scripts.make_toy --size small`
 
-### 4. Run Yosys FPGA Resource Characterization
+### 4. Run Yosys + `nextpnr-ecp5` Resource & Timing Characterization
 
-* **Default zero-DSP mode (`0 DSP48E1` everywhere) + check** $\le 10\%$ **LUT/MAC baseline gate:** `make resource-check`
+* **Default zero-DSP mode (`0` DSPs everywhere on ECP5 + Cyclone V) + check** $\le 10\%$ **cells/MAC baseline gate:** `make resource-check`
 
-* **Opt-in 1-DSP/row mode (`1 DSP48E1` per row for group scaling via `--use-dsp`):** `python3 -m scripts.resource_report --use-dsp`
+* **Opt-in 1-DSP/row mode (`1` hard $18 \times 18$ DSP per row for group scaling via `--use-dsp`):** `python3 -m scripts.resource_report --use-dsp`
 
 ## Engineering & Contribution Discipline
 
@@ -149,7 +161,7 @@ Setun uses a pinned Python virtual environment (`.venv`)—including `migen==0.1
 
 2. **Bit-Exact Cosimulation:** Every Migen hardware module under `setun/accelerators/` must pass Verilator + `cocotb` equivalence tests (including randomized backpressure, `-128` saturation corners, zero scales, and ragged dimensions) against `setun/ref/`.
 
-3. **Zero Unverified Claims:** Resource numbers (`LUT6`, `FF`, `DSP48E1`) and numerical accuracy bounds (`cosine`, `entropy`, `perplexity`) are generated by reproducible scripts in `scripts/` and enforced in CI.
+3. **Zero Unverified Claims:** Resource numbers (`LUT4`, `ALUT`, `FF`, `DP16KD`, `M10K`, `DSP`), `nextpnr-ecp5` `Fmax`, and numerical accuracy bounds (`cosine`, `entropy`, `perplexity`) are generated by reproducible scripts in `scripts/` and enforced in CI.
 
 4. **Formatting & Linting:** All commits must pass `make format && make lint` (`ruff` targeting Python 3.10+ compatibility, 100-column line limit) and `make ci` before merge.
 

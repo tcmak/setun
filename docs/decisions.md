@@ -18,9 +18,9 @@ Reserved Code (11) Handling (Contract vs. Defense-in-Depth): Loader rejection is
 Container Framing: Interim STNW framing has been retired in favor of canonical TTAPE v1 (magic "TTAP", 0x50415454 LE) owned by TernaryTape.jl (third_party/TernaryTape/spec/ttape-v1.0.md); see ADR-014.
 
 ADR-004: Ternary Matmul Micro-Architecture (0-DSP Default, Opt-In Row DSP)
-Status: Accepted at S1.end (2026-11-14); Amended 2026-11-18 (0-DSP default, opt-in 1 DSP/row)
-Decision: Multiplier-free add/sub tree in TernaryDot (0 DSPs per ternary MAC lane) paired with GroupAccumulateScale defaulting to 0 DSPs (Yosys -nodsp LUT multiplier for VTPE-Grouped u16 scales, or shift-only mode for VTPE-Core power-of-two tapes) and supporting opt-in 1 DSP48E1 per row (--use-dsp) when hard DSP slices are abundant.
-Evidence: Yosys synth_xilinx (xc7) on a canonical L=64, G=128, A=8 TernaryRow measures 3,300 LUT6 / 0 DSP48E1 (51.56 LUTs/MAC) in default -nodsp mode and 2,697 LUT6 / 1 DSP48E1 (42.14 LUTs/MAC) in --use-dsp mode. Even on small Artix-7 (XC7A35T), pure LUT fabric fits 5 rows (320 MACs/cycle, 0 DSPs), still exceeding the 64 MACs/cycle external memory bandwidth ceiling at 100 MHz.
+Status: Accepted at S1.end (2026-11-14); Amended 2026-11-24 (0-DSP default, non-Xilinx ECP5 + Cyclone V baseline)
+Decision: Multiplier-free add/sub tree in TernaryDot (0 DSPs per ternary MAC lane) paired with GroupAccumulateScale defaulting to 0 DSPs (Yosys -nodsp LUT multiplier for TTAPE-grouped u16 scales, or shift-only mode for TTAPE-core power-of-two tapes) and supporting opt-in 1 hard 18x18 DSP per row (--use-dsp) when hard DSP slices are abundant.
+Evidence: On canonical L=64, G=128, A=8 TernaryRow, Yosys synth_ecp5 measures 4,741 LUT4 / 0 MULT18X18D (74.08 LUT4/MAC) in default -nodsp mode vs. 3,942 LUT4 / 1 MULT18X18D in --use-dsp mode, and synth_intel_alm -family cyclonev measures 2,677 ALUT / 0 MUL18X18 (41.83 ALUT/MAC) vs. 1,921 ALUT / 1 MUL18X18. On Lattice ECP5-85F (83,640 LUT4), 80% pure LUT fabric fits 14 rows (896 MACs/cycle, [EXTRAPOLATED from R=1]), exceeding the 305 MACs/cycle external DDR3 weight-streaming ceiling (1.6 GB/s at 20.99 MHz governing TernaryAccel Fmax).
 
 ADR-005: Control Plane
 Status: Provisional (Decide in Track B)
@@ -30,8 +30,11 @@ ADR-006: First Real Model and Reference Runtime
 Status: Provisional (Decide at start of Track A)
 Decision: Ternary Bonsai 1.7B + PrismML llama.cpp fork (fallback: BitNet b1.58 2B4T).
 
-ADR-007: FPGA Board Selection
-Status: Open (Decide at S3.0)
+ADR-007: FPGA Board Selection & Non-Xilinx Multi-Vendor Baseline
+Status: Candidate Baseline Locked (2026-11-24; Final Board Selection at S3.0 / Task 6.1)
+Decision: Setun targets strictly non-Xilinx desk-sized FPGA families—excluding AMD/Xilinx (xc7 / Vivado) flows—and establishes two primary synthesis baselines in scripts/resource_report.py:
+1. Lattice ECP5-85F (LambdaConcept ECPIX-5 512 MB DDR3, Radiona ULX3S SDRAM): open-source end-to-end synthesis and place-and-route via yosys synth_ecp5 -nodsp + nextpnr-ecp5 (--85k --speed 6), governing throughput strictly by the minimum measured Fmax across active pipeline stages (full TernaryAccel top = 20.99 MHz, Requantize = 49.08 MHz, isolated TernaryRow = 62.08 MHz prior to Season 3 Task 6.3 pipelining).
+2. Intel/Altera Cyclone V (Terasic DE10-Nano 5CSEBA6 1 GB HPS DDR3, Arrow DECA 5CSEMA6 512 MB DDR3): synthesized in CI via yosys synth_intel_alm -family cyclonev -nodsp (synth-only, with BW-matched targets marked N/A pending Quartus Lite TimeQuest STA in Season 3).
 
 ADR-008: HBM Board Selection
 Status: Not planned (North star)
@@ -55,7 +58,7 @@ Decision: Native Ubuntu/Debian (WSL2) system packages via apt (verilator, yosys)
 ADR-013: Cross-Portfolio Mythos-Loop Alignment & Season 3 HIL Parity Runner
 Status: Accepted (2026-11-18)
 Decision: Align Setun's synthesis, real-model evaluation, and board bring-up gates with the cross-repo VeriObjC / TernaryTape / veriStream-mythos loop:
-1. Task 2.6 characterizes XC7, Lattice ECP5, and Intel Cyclone V with 0-DSP (-nodsp) as the default baseline so ADR-007 board selection uses measured multi-vendor data.
+1. Task 2.6 characterizes Lattice ECP5 (yosys synth_ecp5 + nextpnr-ecp5) and Intel Cyclone V (yosys synth_intel_alm) with 0-DSP (-nodsp) as the default baseline so ADR-007 board selection uses measured non-Xilinx multi-vendor data without extrapolating ECP5 timing onto synth-only Cyclone V rows.
 2. Season 4 Track A enforces a real-checkpoint PTQ quality gate (perplexity / probe accuracy on <= 1B weights) prior to the M1 demo, splitting hardware vs. QAT research tracks if generic PTQ collapses.
 3. Season 3 board bring-up (Etherbone / litex_server) doubles as the portfolio Hardware-in-the-Loop (HIL) parity runner against shared TTAPE golden fixtures.
 
