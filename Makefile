@@ -1,6 +1,7 @@
 .PHONY: doctor doctor-lock lint format test coverage coverage-full sim-smoke resource-report resource-check ci nightly
 
 PYTHON ?= python3
+PYTEST_PARALLEL ?= -n auto --dist loadfile
 
 doctor:
 	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock
@@ -17,7 +18,7 @@ format:
 	$(PYTHON) -m ruff format setun targets tests scripts
 
 test:
-	$(PYTHON) -m pytest tests/unit
+	$(PYTHON) -m pytest $(PYTEST_PARALLEL) tests/unit
 
 coverage:
 	$(PYTHON) -m scripts.coverage_report --fast --show-missing
@@ -49,5 +50,5 @@ nightly:
 	@$(PYTHON) scripts/doctor.py --lockfile toolchain.lock --banner
 	$(MAKE) lint
 	$(MAKE) resource-check
-	SETUN_NIGHTLY=1 $(PYTHON) -m pytest tests/unit
+	SETUN_NIGHTLY=1 $(PYTHON) -m pytest $(PYTEST_PARALLEL) tests/unit
 	$(MAKE) sim-smoke

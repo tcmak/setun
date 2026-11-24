@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [master, main]
 
+env:
+  CC: "ccache gcc"
+  CXX: "ccache g++"
+  CCACHE_DIR: "${{ github.workspace }}/.cache/ccache"
+  CCACHE_BASEDIR: "${{ github.workspace }}"
+  CCACHE_NOHASHDIR: "true"
+  MAKEFLAGS: "-j1"
+
 jobs:
   ci:
     name: Toolchain Doctor, Lint & Unit Tests
@@ -16,38 +24,60 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install system HDL packages (Verilator & Yosys)
+      - name: Install system HDL packages (Verilator, Yosys, ccache)
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git verilator yosys libevent-dev libjson-c-dev
+          sudo apt-get install -y build-essential ccache git verilator yosys libevent-dev libjson-c-dev
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
 
-      - name: Install Python dependencies, nextpnr-ecp5 (prjtrellis), & pinned LiteX commits
+      - name: Cache Python virtualenv (.venv)
+        id: venv-cache
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.pythonLocation }}-${{ hashFiles('pyproject.toml', 'toolchain.lock') }}
+
+      - name: Install Python dependencies & pinned LiteX commits
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-          python -m pip install \
-            "git+https://github.com/enjoy-digital/litex.git@9187839f2d275352ef6f0d7ab14431e2a66b8f81" \
-            "git+https://github.com/enjoy-digital/litedram.git@f2d22975d67229676e10308ae6e71b819b6afe42" \
-            "git+https://github.com/enjoy-digital/liteeth.git@9712c3899c4b9d162aca5aef403889ab2c8c4542"
-          yowasp-nextpnr-ecp5 --version
+          if [ ! -x .venv/bin/python ]; then
+            python -m venv .venv
+            .venv/bin/python -m pip install --upgrade pip
+            .venv/bin/python -m pip install -e ".[dev]"
+            .venv/bin/python -m pip install \
+              "git+https://github.com/enjoy-digital/litex.git@9187839f2d275352ef6f0d7ab14431e2a66b8f81" \
+              "git+https://github.com/enjoy-digital/litedram.git@f2d22975d67229676e10308ae6e71b819b6afe42" \
+              "git+https://github.com/enjoy-digital/liteeth.git@9712c3899c4b9d162aca5aef403889ab2c8c4542"
+          else
+            .venv/bin/python -m pip install --no-deps -e .
+          fi
+          .venv/bin/yowasp-nextpnr-ecp5 --version
+
+      - name: Cache ccache, Verilator builds, & Yosys/nextpnr synthesis results
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/ccache
+            .cache/synth
+            sim_build/.verilator_cache
+          key: hdl-cache-${{ runner.os }}-${{ hashFiles('toolchain.lock') }}-${{ github.sha }}
+          restore-keys: |
+            hdl-cache-${{ runner.os }}-${{ hashFiles('toolchain.lock') }}-
 
       - name: Verify toolchain lockfile
-        run: python scripts/doctor.py
+        run: .venv/bin/python scripts/doctor.py
 
       - name: Run Ruff linter
-        run: ruff check .
+        run: .venv/bin/ruff check .
 
       - name: Run Ruff format check
-        run: ruff format --check .
+        run: .venv/bin/ruff format --check .
 
-      - name: Run pytest suite
-        run: pytest
+      - name: Run parallel pytest suite
+        run: .venv/bin/pytest -n auto --dist loadfile
 
       - name: Verify deterministic synthesis & nextpnr-ecp5 resource report
-        run: python scripts/resource_report.py --check
+        run: .venv/bin/python scripts/resource_report.py --check

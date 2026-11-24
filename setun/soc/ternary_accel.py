@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -1312,9 +1313,13 @@ def export_soc_csr_artifacts(
 
     if json_path is not None:
         json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text(json_text, encoding="utf-8")
+        tmp_j = json_path.with_suffix(f".{os.getpid()}.tmp")
+        tmp_j.write_text(json_text, encoding="utf-8")
+        tmp_j.replace(json_path)
     if header_path is not None:
         header_path.parent.mkdir(parents=True, exist_ok=True)
-        header_path.write_text(header_text, encoding="utf-8")
+        tmp_h = header_path.with_suffix(f".{os.getpid()}.tmp")
+        tmp_h.write_text(header_text, encoding="utf-8")
+        tmp_h.replace(header_path)
 
     return json_text, header_text

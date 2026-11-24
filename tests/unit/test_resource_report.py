@@ -503,3 +503,24 @@ def test_ternary_accel_bram_and_fmax_characterization() -> None:
     assert bram_metrics.ecp5_dp16kd >= 2, f"Expected ECP5 DP16KD inference, got {bram_metrics}"
     assert bram_metrics.cyclonev_m10k >= 2, f"Expected CycloneV M10K inference, got {bram_metrics}"
     assert 10.0 < bram_metrics.ecp5_fmax_mhz < 500.0 and bram_metrics.ecp5_fmax_mhz != 100.0
+
+
+def test_synth_cache_roundtrip_and_disable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify content-addressed synthesis cache hit/miss and SETUN_DISABLE_SYNTH_CACHE."""
+    import scripts.resource_report as rr
+
+    monkeypatch.setattr(rr, "SYNTH_CACHE_DIR", tmp_path / "synth_cache")
+    monkeypatch.setenv("SETUN_FORCE_SYNTH_CACHE_TEST", "1")
+    monkeypatch.delenv("SETUN_DISABLE_SYNTH_CACHE", raising=False)
+
+    ckey = rr._synth_cache_key("unit:tag", "module top(); endmodule")
+    assert rr._synth_cache_load(ckey) is None
+
+    rr._synth_cache_store(ckey, [100, 50, 0])
+    assert rr._synth_cache_load(ckey) == [100, 50, 0]
+
+    monkeypatch.setenv("SETUN_DISABLE_SYNTH_CACHE", "1")
+    assert rr._synth_cache_load(ckey) is None
+    ckey2 = rr._synth_cache_key("unit:tag2", "module top2(); endmodule")
+    rr._synth_cache_store(ckey2, [1, 2, 0])
+    assert not ckey2.exists()

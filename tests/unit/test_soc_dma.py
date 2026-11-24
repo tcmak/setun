@@ -46,6 +46,69 @@ def _pack_ram_arena(blobs: list[bytes]) -> tuple[bytes, list[int]]:
     return bytes(buf), offsets
 
 
+def test_soc_dma_ram_init_elaboration_and_cli_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fast (<2s) elaboration & CLI coverage for SetunSimSoC ram_init (Path & Sequence[int])."""
+    import targets.sim as sim_mod
+
+    ram_bin = tmp_path / "fast_preload.bin"
+    ram_bin.write_bytes(b"\x01\x02\x03\x04\x05")  # non-multiple-of-4 exercises pad path
+
+    soc_path = SetunSimSoC(
+        with_accel_stub=False,
+        with_ternary_accel=True,
+        accel_rows=2,
+        accel_lanes=16,
+        accel_group_size=64,
+        accel_beat_bits=64,
+        accel_max_k=128,
+        accel_max_rows=64,
+        ram_init=ram_bin,
+        expose_host_wb=True,
+        use_external_crg=False,
+        cpu_type=None,
+        integrated_rom_size=0,
+        integrated_main_ram_size=0x4000,
+    )
+    soc_path.finalize()
+
+    soc_seq = SetunSimSoC(
+        with_accel_stub=False,
+        with_ternary_accel=True,
+        accel_rows=1,
+        accel_lanes=16,
+        accel_group_size=64,
+        accel_beat_bits=32,
+        accel_max_k=64,
+        accel_max_rows=16,
+        ram_init=[0x11223344, 0x55667788],
+        expose_host_wb=False,
+        use_external_crg=False,
+        cpu_type=None,
+        integrated_rom_size=0,
+        integrated_main_ram_size=0x4000,
+    )
+    soc_seq.finalize()
+
+    out_dir = tmp_path / "sim_ram_init_fast_out"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "targets.sim",
+            "--output-dir",
+            str(out_dir),
+            "--ram-init",
+            str(ram_bin),
+            "--no-compile-gateware",
+        ],
+    )
+    sim_mod.main()
+    assert (out_dir / "csr.json").exists()
+
+
+@pytest.mark.slow
 def test_soc_dma_ram_init_migen_and_cli_guards(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -192,6 +255,7 @@ def test_soc_dma_ram_init_migen_and_cli_guards(
     assert (out_dir / "csr.json").exists()
 
 
+@pytest.mark.slow
 def test_soc_dma_3_2b_packed_i8_aligned_ragged_sentinels_and_chaining() -> None:
     """Task 3.2b: Verify aligned/ragged packed int8, sentinel masking, beats, & zero-copy chain."""
     rng = np.random.default_rng(20260322)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -24,8 +26,44 @@ REPORTS_DIR = REPO_ROOT / "reports"
 DEFAULT_JSON = REPORTS_DIR / "resources.json"
 DEFAULT_MD = REPORTS_DIR / "resources.md"
 DEFAULT_BASELINE = REPORTS_DIR / "baseline.json"
+SYNTH_CACHE_DIR = REPO_ROOT / ".cache" / "synth"
+TOOLCHAIN_LOCK = REPO_ROOT / "toolchain.lock"
+_ORIG_SUBPROCESS_RUN = subprocess.run
 
 SUPPORTED_VENDORS = ("ecp5", "cyclonev")
+
+
+def _synth_cache_enabled() -> bool:
+    if os.environ.get("SETUN_DISABLE_SYNTH_CACHE") == "1":
+        return False
+    return (
+        subprocess.run is _ORIG_SUBPROCESS_RUN
+        or os.environ.get("SETUN_FORCE_SYNTH_CACHE_TEST") == "1"
+    )
+
+
+def _synth_cache_key(tag: str, verilog_src: str) -> Path:
+    h = hashlib.sha256()
+    if TOOLCHAIN_LOCK.exists():
+        h.update(TOOLCHAIN_LOCK.read_bytes())
+    h.update(b"\0" + tag.encode("utf-8") + b"\0" + verilog_src.encode("utf-8"))
+    return SYNTH_CACHE_DIR / f"{h.hexdigest()}.json"
+
+
+def _synth_cache_load(cache_file: Path) -> object | None:
+    if _synth_cache_enabled() and cache_file.exists():
+        return json.loads(cache_file.read_text(encoding="utf-8"))
+    return None
+
+
+def _synth_cache_store(cache_file: Path, payload: object) -> None:
+    if not _synth_cache_enabled():
+        return
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = cache_file.with_suffix(f".{os.getpid()}.tmp")
+    tmp_file.write_text(json.dumps(payload), encoding="utf-8")
+    tmp_file.replace(cache_file)
+
 
 # Target board capacities across Lattice ECP5-85F and Intel Cyclone V (ADR-007, no AMD/Xilinx)
 CANDIDATE_BOARDS = [
@@ -209,6 +247,11 @@ def _measure_ecp5_fmax_mhz(
     dut = TernaryRow(group_size=group_size, lanes=lanes, act_bits=act_bits)
     mode_suffix = "_nodsp" if nodsp else "_dsp"
     top_name = f"ternary_row_ecp5_pnr_L{lanes}_G{group_size}_A{act_bits}{mode_suffix}"
+    v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+    ckey = _synth_cache_key(f"ecp5_fmax:{top_name}:s{speed}", v_out.main_source)
+    cached_fmax = _synth_cache_load(ckey)
+    if cached_fmax is not None:
+        return float(cached_fmax)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -216,7 +259,6 @@ def _measure_ecp5_fmax_mhz(
         net_json = tmp / "netlist.json"
         rep_json = tmp / "pnr_report.json"
 
-        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
         v_out.write(str(v_path))
 
         nodsp_flag = " -nodsp" if nodsp else ""
@@ -262,7 +304,9 @@ def _measure_ecp5_fmax_mhz(
             f"[scripts/resource_report.py:_measure_ecp5_fmax_mhz] invalid achieved fmax_mhz "
             f"for {top_name}: expected > 0.0, got {achieved}."
         )
-    return round(achieved, 2)
+    res_fmax = round(achieved, 2)
+    _synth_cache_store(ckey, res_fmax)
+    return res_fmax
 
 
 def _synthesize_single_row(
@@ -278,13 +322,17 @@ def _synthesize_single_row(
     dut = TernaryRow(group_size=group_size, lanes=lanes, act_bits=act_bits)
     mode_suffix = "_nodsp" if nodsp else "_dsp"
     top_name = f"ternary_row_{vendor}_L{lanes}_G{group_size}_A{act_bits}{mode_suffix}"
+    v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+    ckey = _synth_cache_key(f"single_row:{top_name}", v_out.main_source)
+    cached_row = _synth_cache_load(ckey)
+    if isinstance(cached_row, list) and len(cached_row) == 3:
+        return int(cached_row[0]), int(cached_row[1]), int(cached_row[2])
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         v_path = tmp / f"{top_name}.v"
         json_path = tmp / "stat.json"
 
-        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
         v_out.write(str(v_path))
 
         nodsp_flag = " -nodsp" if nodsp else ""
@@ -303,7 +351,9 @@ def _synthesize_single_row(
         stat_data = json.loads(json_path.read_text(encoding="utf-8"))
 
     cells: dict[str, int] = stat_data["modules"][f"\\{top_name}"]["num_cells_by_type"]
-    return _count_vendor_cells(cells, vendor)
+    row_counts = _count_vendor_cells(cells, vendor)
+    _synth_cache_store(ckey, list(row_counts))
+    return row_counts
 
 
 def _synthesize_tile(
@@ -326,13 +376,17 @@ def _synthesize_tile(
     )
     mode_suffix = "_nodsp" if nodsp else "_dsp"
     top_name = f"ternary_tile_{vendor}_R{rows}_L{lanes}_G{group_size}_A{act_bits}{mode_suffix}"
+    v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+    ckey = _synth_cache_key(f"tile:{top_name}", v_out.main_source)
+    cached_tile = _synth_cache_load(ckey)
+    if isinstance(cached_tile, list) and len(cached_tile) == 3:
+        return int(cached_tile[0]), int(cached_tile[1]), int(cached_tile[2])
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         v_path = tmp / f"{top_name}.v"
         json_path = tmp / "stat.json"
 
-        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
         v_out.write(str(v_path))
 
         nodsp_flag = " -nodsp" if nodsp else ""
@@ -351,7 +405,9 @@ def _synthesize_tile(
         stat_data = json.loads(json_path.read_text(encoding="utf-8"))
 
     cells: dict[str, int] = stat_data["modules"][f"\\{top_name}"]["num_cells_by_type"]
-    return _count_vendor_cells(cells, vendor)
+    tile_counts = _count_vendor_cells(cells, vendor)
+    _synth_cache_store(ckey, list(tile_counts))
+    return tile_counts
 
 
 def run_sweep(nodsp: bool = True) -> list[SynthMetrics]:
@@ -460,6 +516,12 @@ def run_requantize_characterization(
     top_name = f"requantize_I{in_bits}_O{out_bits}{mode_suffix}"
     nodsp_flag = " -nodsp" if nodsp else ""
 
+    v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+    ckey = _synth_cache_key(f"requantize:{top_name}:s{speed}", v_out.main_source)
+    cached_req = _synth_cache_load(ckey)
+    if isinstance(cached_req, dict):
+        return RequantizeStageMetrics(**cached_req)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         v_path = tmp / f"{top_name}.v"
@@ -468,7 +530,6 @@ def run_requantize_characterization(
         cycv_stat_json = tmp / "cycv_stat.json"
         pnr_json = tmp / "ecp5_pnr.json"
 
-        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
         v_out.write(str(v_path))
 
         # 1. Lattice ECP5 synthesis + nextpnr-ecp5 out-of-context place-and-route
@@ -540,7 +601,7 @@ def run_requantize_characterization(
 
     ecp5_fmax_mhz = _extract_pnr_fmax_mhz(pnr_rep, top_name, "run_requantize_characterization")
 
-    return RequantizeStageMetrics(
+    req_metrics = RequantizeStageMetrics(
         in_bits=in_bits,
         out_bits=out_bits,
         nodsp=nodsp,
@@ -552,6 +613,8 @@ def run_requantize_characterization(
         cyclonev_ffs=cyclonev_ffs,
         cyclonev_dsps=cyclonev_dsps,
     )
+    _synth_cache_store(ckey, asdict(req_metrics))
+    return req_metrics
 
 
 def run_accel_bram_characterization(
@@ -642,6 +705,14 @@ def run_accel_bram_characterization(
     dut = _AccelSynthTop()
     top_name = f"ternary_accel_R{rows}_L{lanes}_G{group_size}_K{max_k}"
     nodsp_flag = " -nodsp" if nodsp else ""
+    v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
+    ckey = _synth_cache_key(
+        f"accel:{top_name}:mr{max_rows}:b{beat_bits}:n{int(nodsp)}:s{speed}",
+        v_out.main_source,
+    )
+    cached_acc = _synth_cache_load(ckey)
+    if isinstance(cached_acc, dict):
+        return AccelBramMetrics(**cached_acc)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -651,7 +722,6 @@ def run_accel_bram_characterization(
         cycv_json = tmp / "cycv.json"
         pnr_json = tmp / "accel_ecp5_pnr.json"
 
-        v_out = verilog.convert(dut, ios=dut.ios, name=top_name)
         v_out.write(str(v_path))
 
         subprocess.run(
@@ -728,7 +798,7 @@ def run_accel_bram_characterization(
 
     ecp5_fmax_mhz = _extract_pnr_fmax_mhz(pnr_rep, top_name, "run_accel_bram_characterization")
 
-    return AccelBramMetrics(
+    acc_metrics = AccelBramMetrics(
         rows=rows,
         lanes=lanes,
         group_size=group_size,
@@ -745,6 +815,8 @@ def run_accel_bram_characterization(
         cyclonev_m10k=cyclonev_m10k,
         cyclonev_dsps=cyclonev_dsps,
     )
+    _synth_cache_store(ckey, asdict(acc_metrics))
+    return acc_metrics
 
 
 def resolve_governing_ecp5_fmax(
