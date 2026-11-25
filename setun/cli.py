@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 
 from setun import __version__
+from setun.ref.m0 import load_m0_model
+from setun.runtime.driver import add_backend_argument
+from setun.runtime.m0_runner import run_m0_greedy
 
 
 def get_git_hash() -> str:
@@ -38,12 +42,97 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=get_version_string(),
     )
+    subparsers = parser.add_subparsers(dest="command")
+
+    run_p = subparsers.add_parser(
+        "run",
+        help="Run hybrid M0 greedy decode across ref, sim, or board backends (Task 3.4)",
+    )
+    run_p.add_argument(
+        "model",
+        type=Path,
+        help="Path to M0 .ttape (TTAPE-extended v1.0) or .stm0 model file",
+    )
+    add_backend_argument(run_p, default="ref")
+    run_p.add_argument(
+        "--tokens",
+        type=int,
+        default=16,
+        help="Number of new tokens to generate greedily (default: 16)",
+    )
+    run_p.add_argument(
+        "--prompt",
+        type=str,
+        default="1",
+        help="Comma-separated prompt token IDs (default: '1')",
+    )
+    run_p.add_argument(
+        "--clk-mhz",
+        type=float,
+        default=None,
+        help="Optional clock frequency override in MHz for MB/s calculation",
+    )
     return parser
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    if args.tokens < 1:
+        raise ValueError(f"[setun run] --tokens must be >= 1, got {args.tokens}.")
+
+    prompt_parts = [p.strip() for p in args.prompt.split(",") if p.strip()]
+    if not prompt_parts:
+        raise ValueError("[setun run] --prompt must contain at least one integer token ID.")
+    prompt_ids = [int(p) for p in prompt_parts]
+
+    if args.clk_mhz is not None and args.clk_mhz <= 0.0:
+        raise ValueError(f"[setun run] --clk-mhz must be > 0, got {args.clk_mhz}.")
+
+    clk_hz = (args.clk_mhz * 1e6) if args.clk_mhz is not None else None
+    model = load_m0_model(args.model)
+
+    emitted = 0
+
+    def _emit_token(tok: int) -> None:
+        nonlocal emitted
+        prefix = " " if emitted > 0 else ""
+        sys.stdout.write(f"{prefix}{tok}")
+        sys.stdout.flush()
+        emitted += 1
+
+    _, _, _, summary = run_m0_greedy(
+        model,
+        backend=args.backend,
+        prompt_tokens=prompt_ids,
+        max_new_tokens=args.tokens,
+        clk_freq_hz=clk_hz,
+        on_token=_emit_token,
+    )
+    print(flush=True)
+
+    clk_mhz = summary.backend_clk_hz / 1e6
+    print(
+        f"[setun run] backend={args.backend} model={model.config.name} "
+        f"prompt={list(summary.prompt_tokens)} tokens={len(summary.generated_tokens)} "
+        f"forward_steps={summary.forward_steps} gemv_calls={summary.gemv_calls}",
+        file=sys.stderr,
+    )
+    print(
+        f"[setun perf] total_cycles={summary.total_cycles} "
+        f"cycles/tok={summary.cycles_per_token:.1f} "
+        f"bus_beats={summary.total_bus_beats} "
+        f"bus_util={summary.bus_utilization * 100.0:.2f}% "
+        f"bytes_moved={summary.total_bytes_moved} "
+        f"MB/s={summary.mb_per_sec:.4f} (clk={clk_mhz:.2f} MHz)",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.command == "run":
+        return _cmd_run(args)
     parser.print_help()
     return 0
 

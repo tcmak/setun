@@ -4,15 +4,47 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import numpy as np
 
 from setun.ref.format import (
+    ARCH_LAYER_STRUCT,
+    AUX_ROLE_EMBEDDING,
+    AUX_ROLE_RMSNORM,
+    FLAG_MANIFEST,
+    FLAG_NON_CORE,
+    FP32_AUX_REC_STRUCT,
+    GROUP_SCALE_REC_STRUCT,
+    HEADER_STRUCT,
+    LAYER_GLU_MUX,
+    LAYER_HOST_EMBEDDING,
+    LAYER_RMSNORM_SHIFT,
+    LAYER_TERNARY_DENSE,
+    MAGIC,
+    SECTION_HEADER_STRUCT,
+    TAG_ARCH_DESCRIPTOR,
+    TAG_FP32_AUX,
+    TAG_GROUP_SCALES_U16,
+    TAG_MANIFEST,
+    TAG_SCALES,
+    TAG_WEIGHTS,
+    VERSION_MAJOR,
+    VERSION_MINOR,
     PackedTernaryTensor,
+    TtapeValidationError,
+    _audit_ttape,
+    _clog2_u16,
+    _fnv1a_32,
+    _fnv1a_64,
+    _header_fnv1a_32,
     deserialize_packed_weights,
+    load_ttape_layers,
     pack_ternary_tensor,
+    pack_trits_1d,
     serialize_packed_weights,
     unpack_ternary_tensor,
 )
@@ -631,3 +663,231 @@ def shannon_entropy(logits: np.ndarray) -> float:
 def bundle_sha256(blob: bytes) -> str:
     """Return hex SHA256 digest of a serialized M0 bundle."""
     return hashlib.sha256(blob).hexdigest()
+
+
+def serialize_m0_ttape(model: M0Model) -> bytes:
+    """Serialize an M0Model into a canonical TTAPE v1.0 TTAPE-extended (.ttape) artifact."""
+    cfg = model.config
+    arch_entries: list[bytes] = []
+    fp32_records: list[bytes] = []
+    weight_chunks: list[bytes] = []
+    scale_s16_list: list[int] = []
+    group_records: list[bytes] = []
+
+    def _add_fp32(role: int, arr: np.ndarray, l_idx: int) -> None:
+        flat = np.ascontiguousarray(arr, dtype="<f4").reshape(-1)
+        fp32_records.append(
+            FP32_AUX_REC_STRUCT.pack(l_idx, role, 0, int(flat.size)) + flat.tobytes()
+        )
+
+    def _add_rmsnorm(arr: np.ndarray) -> None:
+        l_idx = len(arch_entries)
+        dim = int(arr.size)
+        arch_entries.append(
+            ARCH_LAYER_STRUCT.pack(LAYER_RMSNORM_SHIFT, dim, dim, 0, 0, 0, cfg.max_seq_len)
+        )
+        _add_fp32(AUX_ROLE_RMSNORM, arr, l_idx)
+
+    def _add_dense(proj: PackedTernaryTensor) -> None:
+        l_idx = len(arch_entries)
+        w_logical, scales_u16, shift = unpack_ternary_tensor(proj)
+        n_rows, n_cols = w_logical.shape
+        row_bytes = (n_cols + 3) // 4
+        w_wire = np.pad(w_logical, ((0, 0), (0, row_bytes * 4 - n_cols)))
+        weight_chunks.append(np.ascontiguousarray(pack_trits_1d(w_wire), dtype=np.uint8).tobytes())
+        scale_s16_list.append(-shift)
+        n_groups = int(scales_u16.shape[1])
+        group_records.append(
+            GROUP_SCALE_REC_STRUCT.pack(l_idx, proj.group_size, shift, 0, n_groups)
+            + np.ascontiguousarray(scales_u16, dtype="<u2").tobytes()
+        )
+        red = _clog2_u16(n_cols)
+        arch_entries.append(
+            ARCH_LAYER_STRUCT.pack(
+                LAYER_TERNARY_DENSE, n_cols, n_rows, red, 0, red, cfg.max_seq_len
+            )
+        )
+
+    # Layer 0: host_embedding (tok_embeddings)
+    arch_entries.append(
+        ARCH_LAYER_STRUCT.pack(
+            LAYER_HOST_EMBEDDING, cfg.vocab_size, cfg.d_model, 0, 0, 0, cfg.max_seq_len
+        )
+    )
+    _add_fp32(AUX_ROLE_EMBEDDING, model.tok_embeddings, 0)
+
+    for layer in model.layers:
+        _add_rmsnorm(layer.attn_norm)
+        _add_dense(layer.q_proj)
+        _add_dense(layer.k_proj)
+        _add_dense(layer.v_proj)
+        _add_rmsnorm(layer.q_norm)
+        _add_rmsnorm(layer.k_norm)
+        _add_dense(layer.o_proj)
+        _add_rmsnorm(layer.ffn_norm)
+        _add_dense(layer.gate_proj)
+        _add_dense(layer.up_proj)
+        arch_entries.append(
+            ARCH_LAYER_STRUCT.pack(
+                LAYER_GLU_MUX, cfg.ffn_dim, cfg.ffn_dim, 0, 0, 0, cfg.max_seq_len
+            )
+        )
+        _add_dense(layer.down_proj)
+
+    _add_rmsnorm(model.final_norm)
+
+    weights_payload = b"".join(weight_chunks)
+    scales_payload = struct.pack(f"<{len(scale_s16_list)}h", *scale_s16_list)
+    arch_payload = struct.pack("<HH", len(arch_entries), 0) + b"".join(arch_entries)
+    group_payload = struct.pack("<HH", len(group_records), 0) + b"".join(group_records)
+    fp32_payload = struct.pack("<HH", len(fp32_records), 0) + b"".join(fp32_records)
+
+    run_id = hashlib.sha256(f"m0:{cfg.name}:{cfg.seed}".encode()).hexdigest()[:32].encode("ascii")
+    qp_json = json.dumps(
+        {
+            "arch": "m0",
+            "config": asdict(cfg),
+            "weight_unit_scales": [float(ly.weight_unit_scale) for ly in model.layers],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest_hex = (
+        hashlib.sha256(weights_payload + group_payload + fp32_payload).hexdigest().encode("ascii")
+    )
+    manifest_fields = (
+        b"setun/m0-ttape/1.0",
+        run_id,
+        b"absmean-b158-grouped-u16",
+        qp_json,
+        digest_hex,
+    )
+    manifest_payload = b"".join(struct.pack("<H", len(f)) + f for f in manifest_fields)
+
+    sections = (
+        (TAG_WEIGHTS, weights_payload),
+        (TAG_SCALES, scales_payload),
+        (TAG_ARCH_DESCRIPTOR, arch_payload),
+        (TAG_MANIFEST, manifest_payload),
+        (TAG_GROUP_SCALES_U16, group_payload),
+        (TAG_FP32_AUX, fp32_payload),
+    )
+    sec_blobs = bytearray()
+    for tag, payload in sections:
+        sec_blobs.extend(SECTION_HEADER_STRUCT.pack(tag, 0, len(payload), _fnv1a_32(payload)))
+        sec_blobs.extend(payload)
+
+    sec_bytes = bytes(sec_blobs)
+    flags = FLAG_MANIFEST | FLAG_NON_CORE
+    artifact_id = _fnv1a_64(sec_bytes)
+    draft_hdr = HEADER_STRUCT.pack(
+        MAGIC,
+        VERSION_MAJOR,
+        VERSION_MINOR,
+        flags,
+        len(sections),
+        len(sec_bytes),
+        0,
+        artifact_id,
+        b"\x00" * 8,
+    )
+    hdr_crc = _header_fnv1a_32(draft_hdr)
+    final_hdr = HEADER_STRUCT.pack(
+        MAGIC,
+        VERSION_MAJOR,
+        VERSION_MINOR,
+        flags,
+        len(sections),
+        len(sec_bytes),
+        hdr_crc,
+        artifact_id,
+        b"\x00" * 8,
+    )
+    return final_hdr + sec_bytes
+
+
+def deserialize_m0_ttape(blob: bytes) -> M0Model:
+    """Validate and decode a TTAPE-extended M0 .ttape container into an M0Model."""
+    code, msg, off, sec_map = _audit_ttape(blob, reader_profile="extended")
+    if code != "TTAPE_OK" or sec_map is None:
+        raise TtapeValidationError(code, msg, byte_offset=off)
+
+    if TAG_MANIFEST not in sec_map or TAG_FP32_AUX not in sec_map:
+        raise ValueError(
+            "[setun.ref.m0:deserialize_m0_ttape] expected TTAPE-extended M0 tape "
+            "containing manifest (0x0004) and fp32_aux (0x0007)."
+        )
+
+    m_buf = sec_map[TAG_MANIFEST]
+    m_off = 0
+    m_fields: list[bytes] = []
+    for _ in range(5):
+        (flen,) = struct.unpack_from("<H", m_buf, m_off)
+        m_off += 2
+        m_fields.append(bytes(m_buf[m_off : m_off + flen]))
+        m_off += flen
+
+    qp = json.loads(m_fields[3].decode("utf-8"))
+    cfg = M0Config(**qp["config"])
+    unit_scales = [float(s) for s in qp["weight_unit_scales"]]
+
+    dense_list = load_ttape_layers(blob, reader_profile="extended")
+
+    aux_buf = sec_map[TAG_FP32_AUX]
+    aux_count, _ = struct.unpack_from("<HH", aux_buf, 0)
+    aux_off = 4
+    fp32_tensors: list[np.ndarray] = []
+    for _ in range(aux_count):
+        _lidx, _role, _rsvd, elem_count = FP32_AUX_REC_STRUCT.unpack_from(aux_buf, aux_off)
+        aux_off += FP32_AUX_REC_STRUCT.size
+        arr = (
+            np.frombuffer(aux_buf, dtype="<f4", count=elem_count, offset=aux_off)
+            .astype(np.float32)
+            .copy()
+        )
+        aux_off += elem_count * 4
+        fp32_tensors.append(arr)
+
+    tok_embeddings = fp32_tensors[0].reshape(cfg.vocab_size, cfg.d_model)
+    final_norm = fp32_tensors[-1].reshape(cfg.d_model)
+
+    layers: list[M0LayerWeights] = []
+    for b_idx in range(cfg.n_layers):
+        f_base = 1 + 4 * b_idx
+        d_base = 7 * b_idx
+        layers.append(
+            M0LayerWeights(
+                attn_norm=fp32_tensors[f_base + 0],
+                q_norm=fp32_tensors[f_base + 1],
+                k_norm=fp32_tensors[f_base + 2],
+                ffn_norm=fp32_tensors[f_base + 3],
+                q_proj=dense_list[d_base + 0],
+                k_proj=dense_list[d_base + 1],
+                v_proj=dense_list[d_base + 2],
+                o_proj=dense_list[d_base + 3],
+                gate_proj=dense_list[d_base + 4],
+                up_proj=dense_list[d_base + 5],
+                down_proj=dense_list[d_base + 6],
+                weight_unit_scale=unit_scales[b_idx],
+            )
+        )
+
+    return M0Model(
+        config=cfg,
+        tok_embeddings=tok_embeddings,
+        final_norm=final_norm,
+        layers=layers,
+    )
+
+
+def load_m0_model(source: Path | str | bytes) -> M0Model:
+    """Load an M0Model from a .ttape (TTAPE-extended) or .stm0 path or byte buffer."""
+    blob = source if isinstance(source, bytes) else Path(source).read_bytes()
+    if blob[:4] == MAGIC:
+        return deserialize_m0_ttape(blob)
+    if blob[:4] == b"STM0":
+        return deserialize_m0_bundle(blob)
+    raise ValueError(
+        f"[setun.ref.m0:load_m0_model] Unsupported M0 model container magic {blob[:4]!r}; "
+        "expected b'TTAP' (.ttape) or b'STM0' (.stm0)."
+    )

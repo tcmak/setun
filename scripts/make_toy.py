@@ -18,6 +18,7 @@ from setun.ref.m0 import (
     dequantize_packed_tensor_fp32,
     forward_token,
     serialize_m0_bundle,
+    serialize_m0_ttape,
     shannon_entropy,
 )
 
@@ -39,6 +40,10 @@ def generate_toy_artifacts(
     bundle_path = out_dir / f"m0_{size}.stm0"
     bundle_path.write_bytes(bundle_bytes)
     sha256_hex = bundle_sha256(bundle_bytes)
+
+    ttape_bytes = serialize_m0_ttape(model)
+    ttape_path = out_dir / f"m0_{size}.ttape"
+    ttape_path.write_bytes(ttape_bytes)
 
     # Also write dequantized FP32 source weights for reference inspection
     float_tensors: dict[str, np.ndarray] = {
@@ -85,6 +90,9 @@ def generate_toy_artifacts(
         "bundle_file": bundle_path.name,
         "bundle_bytes": len(bundle_bytes),
         "sha256": sha256_hex,
+        "ttape_file": ttape_path.name,
+        "ttape_bytes": len(ttape_bytes),
+        "ttape_sha256": bundle_sha256(ttape_bytes),
         "cosine_int_vs_fp32": round(cos, 6),
         "logits_entropy_nats": round(ent, 4),
     }
@@ -108,9 +116,19 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("build/toy_models"),
         help="Output directory for generated model bundle",
     )
+    parser.add_argument(
+        "--ttape-out",
+        type=Path,
+        default=None,
+        help="Optional explicit output path for the canonical .ttape model file",
+    )
     args = parser.parse_args(argv)
 
     manifest = generate_toy_artifacts(args.out_dir, size=args.size, seed=args.seed)
+    if args.ttape_out is not None:
+        args.ttape_out.parent.mkdir(parents=True, exist_ok=True)
+        src_ttape = args.out_dir / str(manifest["ttape_file"])
+        args.ttape_out.write_bytes(src_ttape.read_bytes())
     print(
         f"[make_toy] Generated {manifest['bundle_file']} "
         f"({manifest['bundle_bytes']} B, sha256={manifest['sha256'][:16]}..., "

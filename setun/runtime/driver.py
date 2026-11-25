@@ -190,13 +190,21 @@ class CocotbWishboneBackend:
 
 
 class EtherboneBackend:
-    """LiteX RemoteClient Etherbone backend (chunked <= 64 words/packet for serial2tcp safety)."""
+    """LiteX RemoteClient Etherbone backend (chunked & flow-controlled for serial2tcp safety)."""
 
     def __init__(self, client, poll_sleep_s: float = 0.0002) -> None:
         self._client = client
         self._poll_sleep_s = poll_sleep_s
+        self._unacked_words = 0
+
+    def _record_writes(self, n_words: int, fence_addr: int) -> None:
+        self._unacked_words += n_words
+        if self._unacked_words >= _ETHERBONE_MAX_BURST_WORDS:
+            self._client.read(fence_addr)
+            self._unacked_words = 0
 
     async def read32(self, addr: int) -> int:
+        self._unacked_words = 0
         res = int(self._client.read(addr)) & 0xFFFF_FFFF
         if self._poll_sleep_s > 0.0:
             time.sleep(self._poll_sleep_s)
@@ -204,8 +212,10 @@ class EtherboneBackend:
 
     async def write32(self, addr: int, value: int) -> None:
         self._client.write(addr, int(value) & 0xFFFF_FFFF)
+        self._record_writes(1, addr)
 
     async def read_words(self, addr: int, count: int) -> list[int]:
+        self._unacked_words = 0
         words: list[int] = []
         offset = 0
         while offset < count:
@@ -225,7 +235,9 @@ class EtherboneBackend:
             chunk = [
                 int(w) & 0xFFFF_FFFF for w in words[offset : offset + _ETHERBONE_MAX_BURST_WORDS]
             ]
-            self._client.write(addr + 4 * offset, chunk)
+            chunk_addr = addr + 4 * offset
+            self._client.write(chunk_addr, chunk)
+            self._record_writes(len(chunk), chunk_addr)
             offset += len(chunk)
 
 
