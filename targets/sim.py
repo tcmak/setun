@@ -69,7 +69,7 @@ class SetunSimSoC(SoCCore):
         platform = SetunSimPlatform(sim_serial=with_uartbone)
         kwargs.pop("uart_name", None)
         kwargs.setdefault("csr_data_width", 32)
-        kwargs.setdefault("bus_bursting", False)
+        kwargs.setdefault("bus_bursting", True)
         kwargs.setdefault("ident_version", False)
 
         if with_uartbone:

@@ -732,6 +732,7 @@ def _open_litex_sim_driver(
             cpu_type=None,
             integrated_rom_size=0,
             integrated_main_ram_size=main_ram_size,
+            bus_bursting=False,
         )
         sim_config = SimConfig()
         sim_config.add_clocker("sys_clk", freq_hz=soc.clk_freq)
