@@ -44,7 +44,7 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
     - [x] `req_enable == 0` wide accumulator readback remains bit-exact and backwards-compatible
 
 ### Block D — Hybrid Decode & Gate 3
-- [ ] `3.3a` `AccelDriver` Python simulation backend (`setun/runtime/`)
+- [x] `3.3a` `AccelDriver` Python simulation backend (`setun/runtime/`)
 - [ ] `3.4` Hybrid M0 decode loop & `setun run` CLI (`setun run <model.ttape> --backend ref|sim --tokens N` in `setun/cli.py`: linear layers on SimSoC `TernaryAccel`, non-linear ops on host, printing token stream + CSR `cycles/tok` and `MB/s` summary)
 - [ ] `3.5` `setun diff` layer-by-layer mismatch debugger (`setun/cli.py`)
 - [ ] `3.6` System-sim CI (`make sim-m0`: `setun run` `--backend sim` vs. `--backend ref` 16 tokens bit-exact, including randomized `reset_less` register init and SDRAM wait-state jitter)

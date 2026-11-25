@@ -1,4 +1,4 @@
-"""LiteX SimSoC target for Setun (Tasks 0.3, 0.4, 3.1a, 3.1b, & 3.2)."""
+"""LiteX SimSoC target for Setun (Tasks 0.3, 0.4, 3.1a, 3.1b, 3.2, & 3.3a)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from litex.build.generic_platform import Pins, Subsignal
 from litex.build.sim import SimPlatform
 from litex.build.sim.config import SimConfig
+from litex.soc.cores import uart
 from litex.soc.integration.builder import Builder, builder_argdict, builder_args
 from litex.soc.integration.soc_core import (
     SoCCore,
@@ -21,16 +22,31 @@ from migen.genlib.io import CRG
 from setun.accelerators.stub import AccelStub
 from setun.soc.ternary_accel import TernaryAccel, export_soc_csr_artifacts
 
-_io = [
+_io_rs232 = [
     ("sys_clk", 0, Pins(1)),
     ("sys_rst", 0, Pins(1)),
     ("serial", 0, Subsignal("tx", Pins(1)), Subsignal("rx", Pins(1))),
 ]
 
+_io_sim_stream = [
+    ("sys_clk", 0, Pins(1)),
+    ("sys_rst", 0, Pins(1)),
+    (
+        "serial",
+        0,
+        Subsignal("source_valid", Pins(1)),
+        Subsignal("source_ready", Pins(1)),
+        Subsignal("source_data", Pins(8)),
+        Subsignal("sink_valid", Pins(1)),
+        Subsignal("sink_ready", Pins(1)),
+        Subsignal("sink_data", Pins(8)),
+    ),
+]
+
 
 class SetunSimPlatform(SimPlatform):
-    def __init__(self) -> None:
-        super().__init__("sim", _io)
+    def __init__(self, sim_serial: bool = False) -> None:
+        super().__init__("sim", _io_sim_stream if sim_serial else _io_rs232)
 
 
 class SetunSimSoC(SoCCore):
@@ -46,14 +62,18 @@ class SetunSimSoC(SoCCore):
         accel_max_rows: int = 2048,
         ram_init: list[int] | Path | str | None = None,
         expose_host_wb: bool = False,
+        with_uartbone: bool = False,
         use_external_crg: bool = True,
         **kwargs,
     ) -> None:
-        platform = SetunSimPlatform()
+        platform = SetunSimPlatform(sim_serial=with_uartbone)
         kwargs.pop("uart_name", None)
         kwargs.setdefault("csr_data_width", 32)
-        kwargs.setdefault("bus_bursting", True)
+        kwargs.setdefault("bus_bursting", False)
         kwargs.setdefault("ident_version", False)
+
+        if with_uartbone:
+            kwargs["with_uart"] = False
 
         if ram_init is not None:
             if isinstance(ram_init, (str, Path)):
@@ -87,6 +107,16 @@ class SetunSimSoC(SoCCore):
             )
             self.bus.add_master(name="ternary_accel_dma", master=self.ternary_accel.dma_wb)
 
+        if with_uartbone:
+            self.uartbone_phy = uart.RS232PHYModel(platform.request("serial"))
+            self.uartbone = uart.UARTBone(
+                phy=self.uartbone_phy,
+                clk_freq=self.clk_freq,
+                cd="sys",
+                address_width=self.bus.address_width,
+            )
+            self.bus.add_master(name="uartbone", master=self.uartbone.wishbone)
+
         if expose_host_wb:
             self.host_wb = wishbone.Interface(data_width=32, adr_width=30)
             self.bus.add_master(name="host_wb", master=self.host_wb)
@@ -105,6 +135,12 @@ def main() -> None:
         "--no-ternary-accel",
         action="store_true",
         help="Disable TernaryAccel row pipeline peripheral",
+    )
+    parser.add_argument(
+        "--serial2tcp-port",
+        type=int,
+        default=0,
+        help="TCP port for serial2tcp module when --with-uartbone is active",
     )
     parser.add_argument(
         "--ram-init",
@@ -142,16 +178,21 @@ def main() -> None:
         out_dir = Path(builder_kwargs.get("output_dir") or "build/sim")
         builder_kwargs["csr_json"] = str(out_dir / "csr.json")
 
+    with_uartbone = bool(soc_kwargs.pop("with_uartbone", getattr(args, "with_uartbone", False)))
     soc = SetunSimSoC(
         with_accel_stub=args.with_accel_stub,
         with_ternary_accel=not args.no_ternary_accel,
+        with_uartbone=with_uartbone,
         ram_init=args.ram_init,
         **soc_kwargs,
     )
 
     sim_config = SimConfig()
     sim_config.add_clocker("sys_clk", freq_hz=soc.clk_freq)
-    sim_config.add_module("serial2console", "serial")
+    if args.with_uartbone and args.serial2tcp_port > 0:
+        sim_config.add_module("serial2tcp", "serial", args={"port": str(args.serial2tcp_port)})
+    else:
+        sim_config.add_module("serial2console", "serial")
 
     builder = Builder(soc, **builder_kwargs)
     builder.build(sim_config=sim_config, run=args.run)
