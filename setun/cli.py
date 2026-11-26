@@ -85,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional output path for per-op STRC binary trace (for `setun diff`)",
     )
+    run_p.add_argument("--rand-reset-seed", type=int, default=None)
+    run_p.add_argument("--ram-jitter-seed", type=int, default=0)
 
     diff_p = subparsers.add_parser(
         "diff",
@@ -156,6 +158,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         prompt_tokens=prompt_ids,
         max_new_tokens=args.tokens,
         clk_freq_hz=clk_hz,
+        rand_reset_seed=args.rand_reset_seed,
+        ram_wait_jitter_seed=args.ram_jitter_seed,
         on_token=_emit_token,
         trace_hook=recorder,
     )

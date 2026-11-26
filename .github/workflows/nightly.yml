@@ -1,0 +1,84 @@
+name: Nightly System-Sim & Regression
+
+on:
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+env:
+  CC: "ccache gcc"
+  CXX: "ccache g++"
+  CCACHE_DIR: "${{ github.workspace }}/.cache/ccache"
+  CCACHE_BASEDIR: "${{ github.workspace }}"
+  CCACHE_NOHASHDIR: "true"
+  MAKEFLAGS: "-j1"
+
+jobs:
+  sim-m0-and-nightly:
+    name: Gate 3 System-Sim M0 (rand_reset + SDRAM jitter) & Nightly Sweep
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system HDL packages (Verilator, Yosys, ccache)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache git verilator yosys libevent-dev libjson-c-dev
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Python virtualenv (.venv)
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.pythonLocation }}-${{ hashFiles('pyproject.toml', 'toolchain.lock') }}
+
+      - name: Install Python dependencies & pinned LiteX commits
+        run: |
+          if [ ! -x .venv/bin/python ]; then
+            python -m venv .venv
+            .venv/bin/python -m pip install --upgrade pip
+            .venv/bin/python -m pip install -e ".[dev]"
+            .venv/bin/python -m pip install \
+              "git+https://github.com/enjoy-digital/litex.git@9187839f2d275352ef6f0d7ab14431e2a66b8f81" \
+              "git+https://github.com/enjoy-digital/litedram.git@f2d22975d67229676e10308ae6e71b819b6afe42" \
+              "git+https://github.com/enjoy-digital/liteeth.git@9712c3899c4b9d162aca5aef403889ab2c8c4542"
+          else
+            .venv/bin/python -m pip install --no-deps -e .
+          fi
+          echo "${{ github.workspace }}/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Cache ccache, Verilator builds, & Yosys/nextpnr synthesis results
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/ccache
+            .cache/synth
+            sim_build/.verilator_cache
+            sim_build/.litex_sim_cache
+          key: hdl-nightly-${{ runner.os }}-${{ hashFiles('toolchain.lock') }}-${{ github.sha }}
+          restore-keys: |
+            hdl-nightly-${{ runner.os }}-${{ hashFiles('toolchain.lock') }}-
+            hdl-cache-${{ runner.os }}-${{ hashFiles('toolchain.lock') }}-
+
+      - name: Run Gate 3 system-sim (`make sim-m0`)
+        run: make PYTHON=.venv/bin/python sim-m0
+
+      - name: Upload Gate 3 STRC traces & CSR cycle logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-m0-traces-and-cycle-logs
+          path: build/sim_m0/
+          if-no-files-found: error
+
+      - name: Run nightly randomized Verilator regression suite
+        env:
+          SETUN_NIGHTLY: "1"
+        run: .venv/bin/pytest -n auto --dist loadfile tests/unit

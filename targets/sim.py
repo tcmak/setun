@@ -10,6 +10,7 @@ from litex.build.sim import SimPlatform
 from litex.build.sim.config import SimConfig
 from litex.soc.cores import uart
 from litex.soc.integration.builder import Builder, builder_argdict, builder_args
+from litex.soc.integration.soc import SoCRegion
 from litex.soc.integration.soc_core import (
     SoCCore,
     get_mem_data,
@@ -17,6 +18,7 @@ from litex.soc.integration.soc_core import (
     soc_core_args,
 )
 from litex.soc.interconnect import wishbone
+from migen import If, Module, Signal
 from migen.genlib.io import CRG
 
 from setun.accelerators.stub import AccelStub
@@ -49,6 +51,43 @@ class SetunSimPlatform(SimPlatform):
         super().__init__("sim", _io_sim_stream if sim_serial else _io_rs232)
 
 
+class WishboneWaitJitter(Module):
+    """Deterministic 16-bit LFSR Wishbone wait-state injector (0..3 stall cycles/beat)."""
+
+    def __init__(self, inner: wishbone.Interface, seed: int = 1) -> None:
+        self.bus = wishbone.Interface(
+            data_width=len(inner.dat_w), address_width=32, addressing="word", bursting=False
+        )
+        lfsr = Signal(16, reset=(int(seed) & 0xFFFF) or 0xACE1)
+        wait_cnt = Signal(2, reset=0)
+        in_flight = Signal(reset=0)
+        req_active = Signal()
+        issue_now = Signal()
+
+        self.sync += If(lfsr[0], lfsr.eq((lfsr >> 1) ^ 0xB400)).Else(lfsr.eq(lfsr >> 1))
+        self.comb += [
+            req_active.eq(self.bus.cyc & self.bus.stb & ~self.bus.ack),
+            issue_now.eq(req_active & ~in_flight & (wait_cnt == 0)),
+            inner.adr.eq(self.bus.adr),
+            inner.dat_w.eq(self.bus.dat_w),
+            inner.sel.eq(self.bus.sel),
+            inner.we.eq(self.bus.we),
+            inner.cti.eq(0),
+            inner.bte.eq(0),
+            inner.cyc.eq(self.bus.cyc & (issue_now | in_flight)),
+            inner.stb.eq(issue_now),
+            self.bus.dat_r.eq(inner.dat_r),
+            self.bus.ack.eq(inner.ack),
+            self.bus.err.eq(inner.err),
+        ]
+        self.sync += [
+            If(inner.ack, in_flight.eq(0)).Elif(issue_now, in_flight.eq(1)),
+            If(~req_active | issue_now, wait_cnt.eq(lfsr[2:4])).Elif(
+                wait_cnt != 0, wait_cnt.eq(wait_cnt - 1)
+            ),
+        ]
+
+
 class SetunSimSoC(SoCCore):
     def __init__(
         self,
@@ -63,6 +102,7 @@ class SetunSimSoC(SoCCore):
         ram_init: list[int] | Path | str | None = None,
         expose_host_wb: bool = False,
         with_uartbone: bool = False,
+        ram_wait_jitter_seed: int = 0,
         use_external_crg: bool = True,
         **kwargs,
     ) -> None:
@@ -83,6 +123,14 @@ class SetunSimSoC(SoCCore):
             else:
                 kwargs["integrated_main_ram_init"] = list(ram_init)
 
+        j_size = 0
+        j_init = None
+        if ram_wait_jitter_seed != 0:
+            j_size = int(kwargs.get("integrated_main_ram_size", 0x400000))
+            j_init = kwargs.pop("integrated_main_ram_init", None)
+            kwargs["integrated_main_ram_size"] = 0
+            kwargs["bus_bursting"] = False
+
         super().__init__(
             platform=platform,
             clk_freq=int(1e6),
@@ -90,6 +138,16 @@ class SetunSimSoC(SoCCore):
             uart_name="serial",
             **kwargs,
         )
+        if j_size > 0:
+            i_wb = wishbone.Interface(
+                data_width=32, address_width=32, addressing="word", bursting=False
+            )
+            self.main_ram = wishbone.SRAM(j_size, init=j_init, bus=i_wb, name="main_ram")
+            self.ram_jitter = WishboneWaitJitter(i_wb, seed=ram_wait_jitter_seed)
+            orig = int(self.mem_map.get("main_ram", 0x40000000))
+            self.bus.add_slave(
+                "main_ram", self.ram_jitter.bus, SoCRegion(origin=orig, size=j_size, mode="rwx")
+            )
         if use_external_crg:
             self.crg = CRG(platform.request("sys_clk"), platform.request("sys_rst"))
 
@@ -148,6 +206,7 @@ def main() -> None:
         default=None,
         help="Preload little-endian binary image into main_ram at 0x40000000 (Task 3.2)",
     )
+    parser.add_argument("--ram-wait-jitter-seed", type=int, default=0)
     parser.add_argument(
         "--export-csr-reports",
         action="store_true",
@@ -184,6 +243,7 @@ def main() -> None:
         with_ternary_accel=not args.no_ternary_accel,
         with_uartbone=with_uartbone,
         ram_init=args.ram_init,
+        ram_wait_jitter_seed=args.ram_wait_jitter_seed,
         **soc_kwargs,
     )
 

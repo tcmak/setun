@@ -689,6 +689,19 @@ def _terminate_proc(proc: subprocess.Popen | None) -> None:
         proc.wait(timeout=2.0)
 
 
+_RAND_RESET_CPP = """#include "verilated.h"
+#include <cstdlib>
+namespace {
+struct SetunRandResetInit {
+  SetunRandResetInit() {
+    Verilated::randReset(2);
+    if (const char* s = std::getenv("SETUN_SIM_SEED")) Verilated::randSeed(std::atoi(s));
+  }
+} g_setun_rand_reset_init;
+}
+"""
+
+
 @contextmanager
 def _open_litex_sim_driver(
     *,
@@ -700,6 +713,8 @@ def _open_litex_sim_driver(
     max_rows: int = 2048,
     main_ram_size: int = 0x400000,
     ram_init: Path | str | None = None,
+    rand_reset_seed: int | None = None,
+    ram_wait_jitter_seed: int = 0,
 ) -> Iterator[AccelDriver]:
     """Build/cache SetunSimSoC(with_uartbone=True) and attach litex_server + RemoteClient."""
     from litex.build.sim.config import SimConfig
@@ -714,7 +729,14 @@ def _open_litex_sim_driver(
         h.update((REPO_ROOT / src_rel).read_bytes())
     for acc_py in sorted((REPO_ROOT / "setun/accelerators").glob("*.py")):
         h.update(acc_py.read_bytes())
-    cfg_tag = f"R{rows}_L{lanes}_G{group_size}_B{beat_bits}_K{max_k}_N{max_rows}_M{main_ram_size}"
+    xtag = (
+        f"_J{ram_wait_jitter_seed}_RR{int(rand_reset_seed is not None)}"
+        if (ram_wait_jitter_seed != 0 or rand_reset_seed is not None)
+        else ""
+    )
+    cfg_tag = (
+        f"R{rows}_L{lanes}_G{group_size}_B{beat_bits}_K{max_k}_N{max_rows}_M{main_ram_size}{xtag}"
+    )
     h.update(cfg_tag.encode("utf-8"))
     if ram_init is not None:
         h.update(Path(ram_init).read_bytes())
@@ -744,6 +766,7 @@ def _open_litex_sim_driver(
             cpu_type=None,
             integrated_rom_size=0,
             integrated_main_ram_size=main_ram_size,
+            ram_wait_jitter_seed=ram_wait_jitter_seed,
             bus_bursting=False,
         )
         sim_config = SimConfig()
@@ -757,6 +780,13 @@ def _open_litex_sim_driver(
             compile_gateware=True,
         )
         builder.build(sim_config=sim_config, run=False)
+        if rand_reset_seed is not None:
+            (gateware_dir / "rand_reset_init.cpp").write_text(_RAND_RESET_CPP, "utf-8")
+            with (gateware_dir / "variables.mak").open("a", encoding="utf-8") as vf:
+                vf.write(
+                    "\nUSER_CPP_SRCS += rand_reset_init.cpp\n"
+                    "INC_DIR += --x-initial unique --x-assign unique\n"
+                )
         build_env = dict(os.environ)
         build_env["JOBS"] = "1"
         subprocess.run(
@@ -778,9 +808,13 @@ def _open_litex_sim_driver(
     srv_proc: subprocess.Popen | None = None
     client: RemoteClient | None = None
     try:
+        vsim_env = dict(os.environ)
+        if rand_reset_seed is not None:
+            vsim_env["SETUN_SIM_SEED"] = str(rand_reset_seed)
         vsim_proc = subprocess.Popen(
             [str(vsim_bin)],
             cwd=str(gateware_dir),
+            env=vsim_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -846,6 +880,8 @@ def open_backend(
     max_rows: int = 2048,
     main_ram_size: int = 0x400000,
     ram_init: Path | str | None = None,
+    rand_reset_seed: int | None = None,
+    ram_wait_jitter_seed: int = 0,
 ) -> Iterator[AccelDriver]:
     """Open an AccelDriver session for `backend` in ('ref', 'sim', 'board')."""
     if backend not in VALID_BACKENDS:
@@ -879,5 +915,7 @@ def open_backend(
         max_rows=max_rows,
         main_ram_size=main_ram_size,
         ram_init=ram_init,
+        rand_reset_seed=rand_reset_seed,
+        ram_wait_jitter_seed=ram_wait_jitter_seed,
     ) as sim_drv:
         yield sim_drv

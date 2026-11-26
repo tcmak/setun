@@ -66,6 +66,8 @@ def open_m0_backend(
     backend: str,
     *,
     rows: int = 4,
+    rand_reset_seed: int | None = None,
+    ram_wait_jitter_seed: int = 0,
 ) -> Iterator[AccelDriver]:
     """Open an AccelDriver sized to `model.config` dimensions and group/lane geometry."""
     cfg = model.config
@@ -84,6 +86,8 @@ def open_m0_backend(
         beat_bits=beat_bits,
         max_k=max_k,
         max_rows=max_rows,
+        rand_reset_seed=rand_reset_seed,
+        ram_wait_jitter_seed=ram_wait_jitter_seed,
     ) as drv:
         yield drv
 
@@ -360,11 +364,15 @@ def run_m0_greedy(
     prompt_tokens: Sequence[int] = (1,),
     max_new_tokens: int = 16,
     clk_freq_hz: float | None = None,
+    rand_reset_seed: int | None = None,
+    ram_wait_jitter_seed: int = 0,
     on_token: Callable[[int], None] | None = None,
     trace_hook: TraceHook | None = None,
 ) -> tuple[list[int], np.ndarray, np.ndarray, HybridDecodeSummary]:
     """Open `backend`, stage M0 weights once, and run greedy hybrid token generation."""
-    with open_m0_backend(model, backend) as drv:
+    with open_m0_backend(
+        model, backend, rand_reset_seed=rand_reset_seed, ram_wait_jitter_seed=ram_wait_jitter_seed
+    ) as drv:
         runner = HybridM0Runner(model, drv, clk_freq_hz=clk_freq_hz)
         return runner.generate_greedy(
             prompt_tokens=prompt_tokens,
