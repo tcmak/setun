@@ -430,6 +430,7 @@ def generate_greedy(
     prompt_tokens: list[int],
     max_new_tokens: int,
     mode: str = "integer",
+    trace_hook: TraceHook | None = None,
 ) -> tuple[list[int], np.ndarray, np.ndarray]:
     """Run greedy decoding for `prompt_tokens` + `max_new_tokens`.
 
@@ -443,14 +444,18 @@ def generate_greedy(
     hidden = np.zeros(model.config.d_model, dtype=np.float32)
 
     for tok in prompt_tokens:
-        logits, hidden = forward_token(model, tok, pos=pos, kv_cache=kv_cache, mode=mode)
+        logits, hidden = forward_token(
+            model, tok, pos=pos, kv_cache=kv_cache, mode=mode, trace_hook=trace_hook
+        )
         pos += 1
 
     generated: list[int] = []
     for _ in range(max_new_tokens):
         next_tok = int(np.argmax(logits))
         generated.append(next_tok)
-        logits, hidden = forward_token(model, next_tok, pos=pos, kv_cache=kv_cache, mode=mode)
+        logits, hidden = forward_token(
+            model, next_tok, pos=pos, kv_cache=kv_cache, mode=mode, trace_hook=trace_hook
+        )
         pos += 1
 
     return generated, logits, hidden

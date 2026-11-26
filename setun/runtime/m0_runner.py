@@ -97,9 +97,11 @@ class HybridM0Runner:
         driver: AccelDriver,
         *,
         clk_freq_hz: float | None = None,
+        gemv_fault_hook: Callable[[int, str, np.ndarray], np.ndarray] | None = None,
     ) -> None:
         self.model = model
         self.driver = driver
+        self.gemv_fault_hook = gemv_fault_hook
         self.clk_freq_hz = (
             float(clk_freq_hz)
             if clk_freq_hz is not None
@@ -176,7 +178,9 @@ class HybridM0Runner:
         )
         self.driver.wait()
         raw_out = self.driver.dma_read(self.out_addr, proj.n_rows * 4)
-        y_i32 = np.frombuffer(raw_out, dtype="<i4")
+        y_i32 = np.frombuffer(raw_out, dtype="<i4").copy()
+        if self.gemv_fault_hook is not None:
+            y_i32 = self.gemv_fault_hook(self.forward_steps, key, y_i32)
 
         pm = self.driver.perf(clk_freq_hz=self.clk_freq_hz)
         self.gemv_calls += 1
@@ -357,6 +361,7 @@ def run_m0_greedy(
     max_new_tokens: int = 16,
     clk_freq_hz: float | None = None,
     on_token: Callable[[int], None] | None = None,
+    trace_hook: TraceHook | None = None,
 ) -> tuple[list[int], np.ndarray, np.ndarray, HybridDecodeSummary]:
     """Open `backend`, stage M0 weights once, and run greedy hybrid token generation."""
     with open_m0_backend(model, backend) as drv:
@@ -365,4 +370,5 @@ def run_m0_greedy(
             prompt_tokens=prompt_tokens,
             max_new_tokens=max_new_tokens,
             on_token=on_token,
+            trace_hook=trace_hook,
         )

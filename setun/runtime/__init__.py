@@ -34,6 +34,15 @@ __all__ = [
     "HybridM0Runner",
     "open_m0_backend",
     "run_m0_greedy",
+    "TraceDiffResult",
+    "TraceEntry",
+    "TraceRecorder",
+    "deserialize_trace",
+    "diff_traces",
+    "format_diff_report",
+    "load_trace",
+    "save_trace",
+    "serialize_trace",
 ]
 
 from setun.runtime.m0_runner import (
@@ -41,4 +50,15 @@ from setun.runtime.m0_runner import (
     HybridM0Runner,
     open_m0_backend,
     run_m0_greedy,
+)
+from setun.runtime.trace import (
+    TraceDiffResult,
+    TraceEntry,
+    TraceRecorder,
+    deserialize_trace,
+    diff_traces,
+    format_diff_report,
+    load_trace,
+    save_trace,
+    serialize_trace,
 )

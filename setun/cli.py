@@ -11,6 +11,13 @@ from setun import __version__
 from setun.ref.m0 import load_m0_model
 from setun.runtime.driver import add_backend_argument
 from setun.runtime.m0_runner import run_m0_greedy
+from setun.runtime.trace import (
+    TraceRecorder,
+    diff_traces,
+    format_diff_report,
+    load_trace,
+    save_trace,
+)
 
 
 def get_git_hash() -> str:
@@ -72,6 +79,37 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional clock frequency override in MHz for MB/s calculation",
     )
+    run_p.add_argument(
+        "--trace",
+        type=Path,
+        default=None,
+        help="Optional output path for per-op STRC binary trace (for `setun diff`)",
+    )
+
+    diff_p = subparsers.add_parser(
+        "diff",
+        help="Compare two STRC execution traces and localize first divergence (Task 3.5)",
+    )
+    diff_p.add_argument("trace_a", type=Path, help="Reference STRC trace file")
+    diff_p.add_argument("trace_b", type=Path, help="Candidate STRC trace file")
+    diff_p.add_argument(
+        "--atol",
+        type=float,
+        default=0.0,
+        help="Absolute tolerance (default: 0.0 bit-exact)",
+    )
+    diff_p.add_argument(
+        "--rtol",
+        type=float,
+        default=0.0,
+        help="Relative tolerance (default: 0.0 bit-exact)",
+    )
+    diff_p.add_argument(
+        "--context",
+        type=int,
+        default=3,
+        help="Number of surrounding ops to display on mismatch (default: 3)",
+    )
     return parser
 
 
@@ -90,6 +128,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
     clk_hz = (args.clk_mhz * 1e6) if args.clk_mhz is not None else None
     model = load_m0_model(args.model)
 
+    recorder = (
+        TraceRecorder(
+            metadata={
+                "backend": args.backend,
+                "model": model.config.name,
+                "prompt": prompt_ids,
+                "tokens": args.tokens,
+            }
+        )
+        if args.trace is not None
+        else None
+    )
+
     emitted = 0
 
     def _emit_token(tok: int) -> None:
@@ -106,8 +157,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         max_new_tokens=args.tokens,
         clk_freq_hz=clk_hz,
         on_token=_emit_token,
+        trace_hook=recorder,
     )
     print(flush=True)
+
+    if args.trace is not None and recorder is not None:
+        save_trace(args.trace, recorder.entries, metadata=recorder.metadata)
 
     clk_mhz = summary.backend_clk_hz / 1e6
     print(
@@ -128,11 +183,34 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_diff(args: argparse.Namespace) -> int:
+    if args.atol < 0.0:
+        raise ValueError(f"[setun diff] --atol must be >= 0, got {args.atol}.")
+    if args.rtol < 0.0:
+        raise ValueError(f"[setun diff] --rtol must be >= 0, got {args.rtol}.")
+    if args.context < 0:
+        raise ValueError(f"[setun diff] --context must be >= 0, got {args.context}.")
+
+    entries_a, _ = load_trace(args.trace_a)
+    entries_b, _ = load_trace(args.trace_b)
+    res = diff_traces(
+        entries_a,
+        entries_b,
+        atol=args.atol,
+        rtol=args.rtol,
+        context=args.context,
+    )
+    print(format_diff_report(res))
+    return 0 if res.matched else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "run":
         return _cmd_run(args)
+    if args.command == "diff":
+        return _cmd_diff(args)
     parser.print_help()
     return 0
 
