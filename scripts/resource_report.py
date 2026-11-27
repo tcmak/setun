@@ -86,16 +86,16 @@ CANDIDATE_BOARDS = [
     {
         "name": "Terasic DE10-Nano (Intel Cyclone V 5CSEBA6, HPS DDR3)",
         "vendor": "cyclonev",
-        "logic_unit": "ALM",
-        "logic_cap": 41_910,
+        "logic_unit": "ALUT",
+        "logic_cap": 83_820,
         "dsps": 112,
         "mem_gbps": 3.2,
     },
     {
         "name": "Arrow DECA (Intel Cyclone V 5CSEMA6, DDR3)",
         "vendor": "cyclonev",
-        "logic_unit": "ALM",
-        "logic_cap": 41_910,
+        "logic_unit": "ALUT",
+        "logic_cap": 83_820,
         "dsps": 112,
         "mem_gbps": 1.6,
     },
@@ -961,6 +961,11 @@ def render_markdown(
 
     for b in CANDIDATE_BOARDS:
         vr = vendor_map[b["vendor"]]
+        if b["logic_unit"] != vr.logic_unit:
+            raise ValueError(
+                f"[scripts/resource_report.py:render_markdown] logic_unit mismatch for "
+                f"{b['name']!r}: board={b['logic_unit']!r}, vendor={vr.logic_unit!r}."
+            )
         max_rows_logic = int((b["logic_cap"] * 0.80) // max(vr.logic_cells, 1))
         if vr.dsps > 0:
             max_rows_dsp = int(b["dsps"] // vr.dsps)

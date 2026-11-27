@@ -524,3 +524,26 @@ def test_synth_cache_roundtrip_and_disable(tmp_path: Path, monkeypatch: pytest.M
     ckey2 = rr._synth_cache_key("unit:tag2", "module top2(); endmodule")
     rr._synth_cache_store(ckey2, [1, 2, 0])
     assert not ckey2.exists()
+
+
+def test_board_fit_cyclonev_uses_aluts_and_rejects_unit_mismatch() -> None:
+    """Verify Cyclone V boards use 83,820 ALUTs (25 rows) and guard unit mismatches."""
+    cycv_boards = [b for b in rr.CANDIDATE_BOARDS if b["vendor"] == "cyclonev"]
+    assert len(cycv_boards) >= 2
+    for b in cycv_boards:
+        assert b["logic_unit"] == "ALUT"
+        assert b["logic_cap"] == 83_820
+
+    vrows = [
+        VendorRowMetrics("ecp5", "ecp5", "LUT4", 4741, 114, 0, 74.078, 62.08),
+        VendorRowMetrics("cyclonev", "cyclonev", "ALUT", 2677, 114, 0, 41.828, None),
+    ]
+    md = render_markdown([], vrows, nodsp=True)
+    assert "| 83,820 ALUT | 112 | 3.2 | 25 | 1,600 |" in md
+
+    bad_vrows = [
+        VendorRowMetrics("ecp5", "ecp5", "LUT4", 4741, 114, 0, 74.078, 62.08),
+        VendorRowMetrics("cyclonev", "cyclonev", "ALM", 2677, 114, 0, 41.828, None),
+    ]
+    with pytest.raises(ValueError, match="logic_unit mismatch"):
+        render_markdown([], bad_vrows, nodsp=True)

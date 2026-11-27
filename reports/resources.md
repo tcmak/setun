@@ -47,8 +47,8 @@ $$\text{Max useful MACs/cycle at }20.99\text{ MHz} = \frac{B_{mem} \times 10^9}{
 |---|---:|---:|---:|---:|---:|---:|
 | LambdaConcept ECPIX-5 (Lattice ECP5-85F, DDR3) | 83,640 LUT4 | 156 | 1.6 | 14 | 896 | 305 |
 | Radiona ULX3S (Lattice ECP5-85F, SDRAM) | 83,640 LUT4 | 156 | 0.3 | 14 | 896 | 57 |
-| Terasic DE10-Nano (Intel Cyclone V 5CSEBA6, HPS DDR3) | 41,910 ALM | 112 | 3.2 | 12 | 768 | N/A (synth-only, pending Quartus STA) |
-| Arrow DECA (Intel Cyclone V 5CSEMA6, DDR3) | 41,910 ALM | 112 | 1.6 | 12 | 768 | N/A (synth-only, pending Quartus STA) |
+| Terasic DE10-Nano (Intel Cyclone V 5CSEBA6, HPS DDR3) | 83,820 ALUT | 112 | 3.2 | 25 | 1,600 | N/A (synth-only, pending Quartus STA) |
+| Arrow DECA (Intel Cyclone V 5CSEMA6, DDR3) | 83,820 ALUT | 112 | 1.6 | 25 | 1,600 | N/A (synth-only, pending Quartus STA) |
 
 ### Key Architectural Takeaways (Gate 2 / G1, `ADR-004`, & `ADR-007`)
 - **Zero DSPs in `TernaryDot`:** All ternary MAC lanes are multiplier-free add/sub trees.
