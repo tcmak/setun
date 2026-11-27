@@ -438,8 +438,8 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 6.2 Reproducible FPGA build [M] · *S3*
 - **Do:** `make fpga-build BOARD=…` (open `yosys`+`nextpnr-ecp5` or Quartus Lite).
 - **Accept:**
-  - [ ] same inputs → same utilization report
-  - [ ] bitstream and reports archived
+  - [x] same inputs → same utilization report
+  - [x] bitstream and reports archived
 
 ### 6.3 Fit and timing [L] · *S3*
 - **Do:** choose (R, L, G) and pipeline depth.

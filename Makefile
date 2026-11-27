@@ -1,4 +1,4 @@
-.PHONY: doctor doctor-lock lint format test coverage coverage-full sim-smoke sim-m0 resource-report resource-check ci nightly
+.PHONY: fpga-build doctor doctor-lock lint format test coverage coverage-full sim-smoke sim-m0 resource-report resource-check ci nightly
 
 PYTHON ?= python3
 PYTEST_PARALLEL ?= -n auto --dist loadfile
@@ -56,3 +56,9 @@ nightly:
 	SETUN_NIGHTLY=1 $(PYTHON) -m pytest $(PYTEST_PARALLEL) tests/unit
 	$(MAKE) sim-m0
 	$(MAKE) sim-smoke
+
+BOARD ?= ecpix5
+FPGA_BUILD_FLAGS ?=
+
+fpga-build:
+	$(PYTHON) -m scripts.fpga_build --board $(BOARD) --archive $(FPGA_BUILD_FLAGS)

@@ -1,0 +1,10 @@
+{
+  "aluts": 28136,
+  "board": "de10nano",
+  "device": "5CSEBA6U23I7",
+  "dsps": 0,
+  "ffs": 3261,
+  "m10k": 31,
+  "nodsp": true,
+  "sys_target_mhz": 100.0
+}
