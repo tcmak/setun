@@ -16,19 +16,23 @@ Running batch-1 ternary LLMs on FPGAs today usually means choosing between close
 
 ```bash
 pip install -e ".[dev]"
-make doctor           # Verify pinned LiteX, Verilator, cocotb, and Yosys versions
-make ci               # Run lint, RTL unit tests, and LiteX SimSoC smoke suite
-make resource-report  # Reproduce LUT/BRAM/DSP and nextpnr-ecp5 fmax tables
+make doctor                                                       # Verify pinned toolchain
+setun run models/m0_toy.ttape --backend ref --tokens 16 --trace build/ref.strc
+setun run models/m0_toy.ttape --backend sim --tokens 16 --trace build/sim.strc
+setun diff build/ref.strc build/sim.strc                          # Verify 561/561 ops bit-exact
+make sim-m0                                                       # Gate 3 sim + jitter/rand_reset
 ```
+
+See **[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)** for the full 5-minute simulation & `setun diff` walkthrough.
 
 ## Status & Roadmap
 
 **Current State:**
 - **Season 1 — COMPLETE:** 0-DSP `TernaryDot` + `GroupAccumulateScale` RTL verified across $6 \times 10^5$ Verilator vectors; Yosys + `nextpnr-ecp5` resource/Fmax baseline locked.
-- **Season 2 — Blocks A–C COMPLETE:** `M0` golden model & `TTAPE v1.0` loader (`1.5`–`1.6`), `WeightUnpacker` + multi-row `TernaryTile` + `Requantize` (`2.3`–`2.5`, `2.8b`), and LiteX `TernaryAccel` SoC wrapper with `CTI_BURST_INCREMENTING` RAM DMA & zero-copy `4 × int8` output writeback at 86%–97%+ bus utilization (`0.4`, `3.1`–`3.2b`).
-- **Up Next (Season 2 Block D — Gate 3):** `AccelDriver` (`3.3a`), `setun run` hybrid `M0` decode (`3.4`), `setun diff` mismatch debugger (`3.5`), and `make sim-m0` system-sim CI (`3.6`).
+- **Season 2 — COMPLETE (Gate 3 Passed):** `M0` golden model & `TTAPE v1.0` loader (`1.5`–`1.6`), `WeightUnpacker` + 4-row `TernaryTile` + `Requantize` (`2.3`–`2.5`, `2.8b`), LiteX `TernaryAccel` Wishbone burst DMA (`0.4`, `3.1`–`3.2b`), `AccelDriver` (`3.3a`), `setun run` 16-token `M0` decode (`3.4`), `setun diff` STRC debugger (`3.5`), `make sim-m0` with `reset_less` + SDRAM jitter (`3.6`), and [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) (`3.7`).
+- **Up Next (Season 3 — Gate 6):** Candidate DDR FPGA board selection (`6.1`), board target & `make fpga-build` (`6.2`), >= 100 MHz timing closure (`6.3`), `.ttape` DDR weight loader (`6.4`), `--backend board` (`3.3b`), and `M0` silicon bring-up (`6.5`–`6.6`).
 
-* **Facts Checked:** `2026-11-24`
+* **Facts Checked:** `2026-11-26`
 
 * **Planning & Governance:**
 

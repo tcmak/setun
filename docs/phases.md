@@ -255,26 +255,26 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
 ### 3.3 `AccelDriver` host abstraction [M] · *S2 · S3 (board backend)*
 - **Do:** Python API (`write_csr`, `dma_write`, `dma_read`, `launch`, `wait`, `perf`) with backends: cocotb-direct, Etherbone via `litex_server`/`RemoteClient` (`sim`), later `board`.
 - **Accept:**
-  - [ ] the same test script passes on both sim backends
-  - [ ] the backend is chosen by `--backend ref|sim|board` flag
+  - [X] the same test script passes on both sim backends
+  - [X] the backend is chosen by `--backend ref|sim|board` flag
 
 ### 3.4 Hybrid M0 decode loop & `setun run` CLI [M] · *S2*
 - **Do:** `setun run <model.ttape> --backend ref|sim --tokens N` in `setun/cli.py`: linear GEMV layers executed on `SimSoC` via `AccelDriver`, non-linear ops on host (`setun/ref/`), streaming token IDs + printing CSR `cycles/tok`, bus utilization %, and effective `MB/s` telemetry summary on stderr.
 - **Accept:**
-  - [ ] `setun run models/m0_toy.ttape --backend sim --tokens 16` produces 16 tokens bit-exact vs `--backend ref`
-  - [ ] CSR cycle counters and throughput metrics logged to stderr
-  - [ ] runs in ≤ 10 min in CI
+  - [X] `setun run models/m0_toy.ttape --backend sim --tokens 16` produces 16 tokens bit-exact vs `--backend ref`
+  - [X] CSR cycle counters and throughput metrics logged to stderr
+  - [X] runs in ≤ 10 min in CI
 
 ### 3.5 First-divergence debugger (`setun diff`) [M] · *S2*
 - **Do:** `setun diff traceA traceB` reports the first op/tensor/index mismatch with context; trace format has op IDs, shapes and hashes.
 - **Accept:**
-  - [ ] an injected 1-bit fault in GEMV (test hook) is localized to the exact op and row by an automated test
+  - [X] an injected 1-bit fault in GEMV (test hook) is localized to the exact op and row by an automated test
 
 ### 3.6 System-sim job in CI (`make sim-m0`) [S] · *S2*
 - **Do:** Wire `make sim-m0` to run `setun run m0_toy.ttape --backend sim --tokens 16` bit-exact vs ref, incorporating randomized `reset_less` register initialization and SDRAM wait-state jitter.
 - **Accept:**
-  - [ ] `make sim-m0` runs green nightly in CI
-  - [ ] trace and cycle logs saved as downloadable build artifacts
+  - [X] `make sim-m0` runs green nightly in CI
+  - [X] trace and cycle logs saved as downloadable build artifacts
 
 ### 3.7 End-User Quickstart & Simulation User Guide
 - **Do:** `docs/USER_GUIDE.md` + `README.md` walkthrough covering setup, running `setun run models/m0_toy.ttape --backend sim --tokens 16`, interpreting CSR `cycles/tok` and `MB/s` counters, and debugging layer mismatches with `setun diff`.
