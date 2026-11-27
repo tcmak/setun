@@ -30,11 +30,11 @@ ADR-006: First Real Model and Reference Runtime
 Status: Provisional (Decide at start of Track A)
 Decision: Ternary Bonsai 1.7B + PrismML llama.cpp fork (fallback: BitNet b1.58 2B4T).
 
-ADR-007: FPGA Board Selection & Non-Xilinx Multi-Vendor Baseline
-Status: Candidate Baseline Locked (2026-11-24; Final Board Selection at S3.0 / Task 6.1)
-Decision: Setun targets strictly non-Xilinx desk-sized FPGA families—excluding AMD/Xilinx (xc7 / Vivado) flows—and establishes two primary synthesis baselines in scripts/resource_report.py:
-1. Lattice ECP5-85F (LambdaConcept ECPIX-5 512 MB DDR3, Radiona ULX3S SDRAM): open-source end-to-end synthesis and place-and-route via yosys synth_ecp5 -nodsp + nextpnr-ecp5 (--85k --speed 6), governing throughput strictly by the minimum measured Fmax across active pipeline stages (full TernaryAccel top = 20.99 MHz, Requantize = 49.08 MHz, isolated TernaryRow = 62.08 MHz prior to Season 3 Task 6.3 pipelining).
-2. Intel/Altera Cyclone V (Terasic DE10-Nano 5CSEBA6 1 GB HPS DDR3, Arrow DECA 5CSEMA6 512 MB DDR3): synthesized in CI via yosys synth_intel_alm -family cyclonev -nodsp (synth-only, with BW-matched targets marked N/A pending Quartus Lite TimeQuest STA in Season 3).
+ADR-007: FPGA Board Selection & Non-Xilinx Dual-Target Strategy (Task 6.1)
+Status: Accepted (2026-11-27)
+Decision: Start with two desk-sized DDR3 targets via `make fpga-build BOARD=ecpix5|de10nano`:
+1. Primary Open-STA & Bitstream Target (`BOARD=ecpix5`): LambdaConcept ECPIX-5 (France; Lattice ECP5-5G `LFE5UM5G-85F-8BG554C` speed -8, 83,640 LUT4, 208 DP16KD, 156 MULT18X18D; 512 MB 16-bit DDR3 via LiteDRAM `ECP5DDRPHY` + RGMII GbE + FT2232H USB-C; 100% open `yosys` + `yowasp-nextpnr-ecp5` + `yowasp-ecppack` flow in `.venv`/CI; ~EUR 329 / ~GBP 280 ex-VAT, currently backordered direct).
+2. Primary Stocked UK Silicon Target (`BOARD=de10nano`): Terasic DE10-Nano `P0496` (Taiwan; Intel Cyclone V SE `5CSEBA6U23I7`, 110K LE / 41,910 ALM, 553 M10K, 112 DSPs; 1 GB 32-bit DDR3-800 + GbE via hardened Cortex-A9 HPS AXI bridge with decoupled fabric PLL; CI utilization via `yosys synth_intel_alm` + bitstream/STA via free Quartus Prime Lite; ~GBP 245 in UK stock). Radiona ULX3S-85F (~GBP 207) is deferred due to 32-64 MB SDR SDRAM and onboard ESP32.
 
 ADR-008: HBM Board Selection
 Status: Not planned (North star)

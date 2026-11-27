@@ -433,7 +433,7 @@ The order matters more than the dates. Each phase ends at a gate, which is the m
   - *Candidate B:* Altera Cyclone V (Terasic DE10-Nano, 1GB DDR3 + ARM HPS AXI bridge, Quartus Lite).
 - **Accept:**
   - [ ] BIOS boots; LiteDRAM memtest passes; console works over UART / Ethernet
-  - [ ] ADR-007 records board, memory, toolchain and cost
+  - [X] ADR-007 records board, memory, toolchain and cost
 
 ### 6.2 Reproducible FPGA build [M] · *S3*
 - **Do:** `make fpga-build BOARD=…` (open `yosys`+`nextpnr-ecp5` or Quartus Lite).

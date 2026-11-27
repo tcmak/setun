@@ -56,7 +56,7 @@ Draft 0.4 · 2026-11-21 · companion to [README.md](README.md) · full task cata
 
 **Goal:** Synthesize, place-and-route, and run M0 bit-exact on a real DDR-equipped FPGA board at ≥ 100 MHz (**Gate 6**).
 
-- [ ] `6.1` Candidate board selection (`ADR-007`, evaluate Lattice ECP5-85F / LambdaConcept ECPIX-5 512MB via open yosys+nextpnr flow vs. Altera Cyclone V / Terasic DE10-Nano 1GB via Quartus Lite + ARM HPS AXI bridge)
+- [x] `6.1` Candidate board selection (`ADR-007`, evaluate Lattice ECP5-85F / LambdaConcept ECPIX-5 512MB via open yosys+nextpnr flow vs. Altera Cyclone V / Terasic DE10-Nano 1GB via Quartus Lite + ARM HPS AXI bridge)
 - [ ] `6.2` Board target & `make fpga-build`
 - [ ] `6.3` Fit & timing closure (≥ 100 MHz measured `nextpnr` / vendor STA, zero negative slack)
 - [ ] `6.4` `.ttape` weight loader to board DDR (Etherbone / SD)
